@@ -1,0 +1,87 @@
+{
+  "format": 1,
+  "maps": [
+    { "id": "m-ascent", "name": "Ascent" },
+    { "id": "m-bind", "name": "Bind" },
+    { "id": "m-lotus", "name": "Lotus" }
+  ],
+  "agents": [
+    {
+      "id": "a-sova", "name": "Sova", "role": "initiator", "color": "#3D8BFF",
+      "abilities": [
+        { "id": 12, "name": "Hunter's Fury", "slot": 4 },
+        { "id": 10, "name": "Shock Bolt", "slot": 1 },
+        { "id": 11, "name": "Recon Bolt", "slot": 2 }
+      ]
+    },
+    {
+      "id": "a-brim", "name": "Brimstone", "role": "controller", "color": "#D97A2B",
+      "abilities": [
+        { "id": 20, "name": "Incendiary", "slot": 1 },
+        { "id": 21, "name": "Sky Smoke", "slot": 3 }
+      ]
+    },
+    {
+      "id": "a-jett", "name": "Jett", "role": "duelist", "color": "#9BD8F0",
+      "abilities": [{ "id": 30, "name": "Cloudburst", "slot": 1 }]
+    }
+  ],
+  "lineups": [
+    {
+      "id": 1, "map": "m-ascent", "agent": "a-sova", "ability": 10, "side": "attack",
+      "title": "Shock A site from Lobby", "tags": ["essential", "community"],
+      "stand": { "x": 20, "y": 80, "callout": "A Lobby" }, "path": [[35, 60], [50, 50]],
+      "land": { "x": 50, "y": 50, "callout": "A Site" },
+      "steps": { "setup": [], "aim": "Top of the antenna", "release": "Left click", "note": null }
+    },
+    {
+      "id": 2, "map": "m-ascent", "agent": "a-sova", "ability": 10, "side": "attack",
+      "title": "Shock A site from Main",
+      "stand": { "x": 25, "y": 85, "callout": "A Main" }, "path": [[51, 51]],
+      "land": { "x": 51, "y": 51, "callout": "A Site" },
+      "steps": { "setup": ["Charge 2 bars, 1 bounce"], "aim": null, "release": "Jump and left click on the way up", "note": "Jump throw" }
+    },
+    {
+      "id": 3, "map": "m-ascent", "agent": "a-sova", "ability": 11, "side": "attack",
+      "title": "Recon A site",
+      "stand": { "x": 20, "y": 80, "callout": "A Lobby" }, "path": [],
+      "land": { "x": 51, "y": 50, "callout": "A Site" }, "steps": null
+    },
+    {
+      "id": 4, "map": "m-ascent", "agent": "a-sova", "ability": 10, "side": "attack",
+      "title": "Shock B default",
+      "stand": { "x": 60, "y": 90, "callout": "B Main" }, "path": [],
+      "land": { "x": 80, "y": 20, "callout": "B Site" }, "steps": null
+    },
+    {
+      "id": 5, "map": "m-ascent", "agent": "a-sova", "ability": 11, "side": "defense",
+      "title": "Recon mid",
+      "stand": { "x": 50, "y": 10, "callout": null }, "path": [],
+      "land": { "x": 30, "y": 30, "callout": "Mid" }, "steps": null
+    },
+    {
+      "id": 6, "map": "m-ascent", "agent": "a-brim", "ability": 20, "side": "attack",
+      "title": "Molly A default",
+      "stand": { "x": 22, "y": 82, "callout": "A Lobby" }, "path": [],
+      "land": { "x": 50, "y": 50, "callout": "A Site" }, "steps": null
+    },
+    {
+      "id": 7, "map": "m-bind", "agent": "a-sova", "ability": 10, "side": "defense",
+      "title": "Shock hookah",
+      "stand": { "x": 70, "y": 40, "callout": "B Site" }, "path": [],
+      "land": { "x": 40, "y": 40, "callout": "Hookah" }, "steps": null
+    },
+    {
+      "id": 8, "map": "m-bind", "agent": "a-jett", "ability": 30, "side": "attack",
+      "title": "Smoke showers",
+      "stand": { "x": 10, "y": 10, "callout": "A Lobby" }, "path": [],
+      "land": { "x": 20, "y": 20, "callout": "Showers" }, "steps": null
+    },
+    {
+      "id": 9, "map": "m-ascent", "agent": "a-sova", "ability": 10, "side": "attack",
+      "title": "Shock A site from Tree", "tags": ["pro"],
+      "stand": { "x": 40, "y": 70, "callout": "A Main" }, "path": [],
+      "land": { "x": 49.5, "y": 51.5, "callout": "A Site" }, "steps": null
+    }
+  ]
+}
