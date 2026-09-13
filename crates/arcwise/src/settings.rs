@@ -1,0 +1,70 @@
+//! What Arcwise remembers between runs, in `%APPDATA%\Arcwise\settings.json`.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::Context as _;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    /// The library folder chosen last.
+    pub library: Option<PathBuf>,
+}
+
+impl Settings {
+    pub fn path() -> Option<PathBuf> {
+        std::env::var_os("APPDATA").map(|dir| Path::new(&dir).join("Arcwise").join("settings.json"))
+    }
+
+    /// Reads the settings, or the defaults when there are none yet or they cannot be read.
+    pub fn load() -> Settings {
+        Self::path()
+            .and_then(|path| Self::read(&path).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn read(path: &Path) -> anyhow::Result<Settings> {
+        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = Self::path().context("APPDATA is not set")?;
+        self.write(&path)
+    }
+
+    /// Writes beside the target and renames over it, so a crash never leaves half a file.
+    pub fn write(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        let part = path.with_extension("json.part");
+        std::fs::write(&part, serde_json::to_vec_pretty(self)?)
+            .with_context(|| format!("writing {}", part.display()))?;
+        std::fs::rename(&part, path).with_context(|| format!("replacing {}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_through_a_file() {
+        let dir = std::env::temp_dir().join(format!("arcwise-settings-{}", std::process::id()));
+        let path = dir.join("nested").join("settings.json");
+        let settings = Settings {
+            library: Some(PathBuf::from(r"D:\lineups")),
+        };
+        settings.write(&path).unwrap();
+        assert_eq!(Settings::read(&path).unwrap(), settings);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn missing_fields_take_defaults() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings, Settings::default());
+    }
+}
