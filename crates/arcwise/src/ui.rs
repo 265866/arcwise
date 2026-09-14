@@ -1,8 +1,13 @@
 //! Small pieces of UI used across the window.
 
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use arcwise_core::Agent;
 use gpui::{
-    Div, ElementId, FontWeight, Hsla, PathBuilder, Pixels, Stateful, canvas, div, point,
-    prelude::*, px,
+    Bounds, Div, ElementId, FontWeight, Hsla, ImageSource, ObjectFit, PathBuilder, Pixels,
+    RenderImage, SharedString, Stateful, canvas, div, img, point, prelude::*, px,
 };
 
 use crate::theme;
@@ -78,4 +83,91 @@ pub fn button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
         .cursor_pointer()
         .hover(|s| s.bg(theme::hover()).border_color(theme::muted()))
         .child(label)
+}
+
+/// An image filling its container, cropped to cover it.
+pub fn cover(image: Arc<RenderImage>) -> gpui::Img {
+    img(ImageSource::Render(image))
+        .size_full()
+        .object_fit(ObjectFit::Cover)
+}
+
+/// An agent's portrait over their color and initial, which is what shows until it loads.
+pub fn face(
+    agent: &Agent,
+    portrait: Option<Arc<RenderImage>>,
+    grayscale: bool,
+    size: Pixels,
+    radius: Pixels,
+) -> Div {
+    let color = theme::agent(agent.color);
+    let initial: String = agent.name.chars().take(1).collect();
+    div()
+        .relative()
+        .flex_none()
+        .size(size)
+        .rounded(radius)
+        .overflow_hidden()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme::mix(color, theme::raised(), 0.32))
+        .font_family(theme::DISPLAY_FONT)
+        .font_weight(FontWeight::EXTRA_BOLD)
+        .text_size(size * 0.38)
+        .text_color(theme::mix(color, gpui::white(), 0.7))
+        .child(initial)
+        .children(portrait.map(|p| {
+            div()
+                .absolute()
+                .inset_0()
+                .child(cover(p).grayscale(grayscale))
+        }))
+}
+
+/// A small uppercase caption, such as the label over a picker's value.
+pub fn label(text: &str) -> Div {
+    div()
+        .text_size(px(10.))
+        .line_height(px(12.))
+        .text_color(theme::faint())
+        .child(text.to_uppercase())
+}
+
+/// A count, in the monospaced face.
+pub fn num(text: impl Into<SharedString>) -> Div {
+    div()
+        .font_family(theme::MONO_FONT)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(11.))
+        .text_color(theme::faint())
+        .child(text.into())
+}
+
+/// A small downward chevron.
+pub fn chevron(color: impl Into<Hsla>) -> impl IntoElement {
+    let color = color.into();
+    canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            let c = bounds.center();
+            let r = px(4.);
+            let mut path = PathBuilder::stroke(px(2.));
+            path.move_to(point(c.x - r, c.y - r / 2.));
+            path.line_to(point(c.x, c.y + r / 2.));
+            path.line_to(point(c.x + r, c.y - r / 2.));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .size(px(12.))
+    .ml(px(2.))
+}
+
+/// Records its parent's bounds each frame, for placing something next to it.
+pub fn measure(into: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
+    canvas(move |bounds, _, _| into.set(bounds), |_, _, _, _| {})
+        .absolute()
+        .inset_0()
 }

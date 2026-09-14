@@ -5,6 +5,8 @@
 
 mod app;
 mod args;
+mod browser;
+mod images;
 mod settings;
 mod theme;
 mod ui;

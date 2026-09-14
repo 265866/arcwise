@@ -3,13 +3,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arcwise_core::Library;
+use arcwise_core::{Library, Start};
 use gpui::{
-    AsyncApp, ClickEvent, Context, FontWeight, IntoElement, PathPromptOptions, SharedString,
-    WeakEntity, Window, div, prelude::*, px,
+    AsyncApp, ClickEvent, Context, Entity, Focusable, FontWeight, IntoElement, PathPromptOptions,
+    SharedString, WeakEntity, Window, div, prelude::*, px,
 };
 
 use crate::args::Args;
+use crate::browser::Browser;
 use crate::settings::Settings;
 use crate::theme;
 use crate::ui;
@@ -20,12 +21,14 @@ enum Screen {
         problem: Option<SharedString>,
     },
     Loading(PathBuf),
-    Browsing(Arc<Library>),
+    Browsing(Entity<Browser>),
 }
 
 pub struct Arcwise {
     settings: Settings,
     screen: Screen,
+    /// Where the command line asked to start; used by the first library only.
+    start: Option<Args>,
 }
 
 impl Arcwise {
@@ -34,6 +37,7 @@ impl Arcwise {
         let mut this = Arcwise {
             screen: Screen::Welcome { problem: None },
             settings,
+            start: None,
         };
         match args {
             Err(problem) => {
@@ -42,7 +46,12 @@ impl Arcwise {
                 }
             }
             Ok(args) => {
-                if let Some(path) = args.library.or_else(|| this.settings.library.clone()) {
+                let library = args
+                    .library
+                    .clone()
+                    .or_else(|| this.settings.library.clone());
+                this.start = Some(args);
+                if let Some(path) = library {
                     this.load(path, cx);
                 }
             }
@@ -62,7 +71,11 @@ impl Arcwise {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(library) => {
-                        this.screen = Screen::Browsing(Arc::new(library));
+                        let start = this.start.take().map(|args| start(&library, args));
+                        let library = Arc::new(library);
+                        let browser =
+                            cx.new(|cx| Browser::new(library, start.unwrap_or_default(), cx));
+                        this.screen = Screen::Browsing(browser);
                         if this.settings.library.as_ref() != Some(&path) {
                             this.settings.library = Some(path);
                             if let Err(e) = this.settings.save() {
@@ -145,7 +158,21 @@ impl Arcwise {
 }
 
 impl Render for Arcwise {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let root = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme::bg())
+            .text_color(theme::text())
+            .font_family(theme::FONT)
+            .text_size(px(14.));
+        if let Screen::Browsing(browser) = &self.screen {
+            if !browser.focus_handle(cx).contains_focused(window, cx) {
+                browser.focus_handle(cx).focus(window, cx);
+            }
+            return root.child(browser.clone());
+        }
         let body = match &self.screen {
             Screen::Welcome { problem } => self.welcome(problem.as_ref(), cx).into_any_element(),
             Screen::Loading(path) => div()
@@ -156,28 +183,26 @@ impl Render for Arcwise {
                 .text_color(theme::muted())
                 .child(format!("Loading {}…", path.display()))
                 .into_any_element(),
-            Screen::Browsing(library) => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(theme::muted())
-                .child(format!(
-                    "{} lineups on {} maps",
-                    library.lineups().len(),
-                    library.maps().len()
-                ))
-                .into_any_element(),
+            Screen::Browsing(_) => unreachable!("rendered above"),
         };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(theme::bg())
-            .text_color(theme::text())
-            .font_family(theme::FONT)
-            .text_size(px(14.))
-            .child(ui::bar())
+        root.child(ui::bar())
             .child(div().flex_1().min_h_0().child(body))
+    }
+}
+
+/// Resolves the command line's names against the library; unknown names are ignored.
+fn start(library: &Library, args: Args) -> Start {
+    Start {
+        map: args
+            .map
+            .and_then(|name| library.map_by_name(&name))
+            .map(|m| m.id.clone()),
+        agent: args
+            .agent
+            .and_then(|name| library.agent_by_name(&name))
+            .map(|a| a.id.clone()),
+        side: args.side,
+        lineup: args.lineup,
+        view: args.view,
     }
 }

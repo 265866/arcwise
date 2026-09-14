@@ -171,6 +171,8 @@ dependencies = [
  "arcwise-core",
  "gpui",
  "gpui_platform",
+ "image",
+ "resvg",
  "serde",
  "serde_json",
 ]
