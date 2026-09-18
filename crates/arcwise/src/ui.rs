@@ -165,9 +165,37 @@ pub fn chevron(color: impl Into<Hsla>) -> impl IntoElement {
     .ml(px(2.))
 }
 
-/// Records its parent's bounds each frame, for placing something next to it.
+/// Records its parent's bounds each frame, for sizing or placing something by it. Layout that
+/// reads the bounds sees the previous frame's, so a change asks for one more frame.
 pub fn measure(into: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
-    canvas(move |bounds, _, _| into.set(bounds), |_, _, _, _| {})
-        .absolute()
-        .inset_0()
+    canvas(
+        move |bounds, window, _| {
+            if into.replace(bounds) != bounds {
+                window.refresh();
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// A key cap, as in the keyboard hints.
+pub fn kbd(key: impl Into<SharedString>, lit: bool) -> Div {
+    div()
+        .min_w(px(18.))
+        .px(px(4.))
+        .py(px(1.))
+        .flex()
+        .justify_center()
+        .rounded(px(4.))
+        .border_1()
+        .border_b_2()
+        .border_color(theme::line())
+        .font_family(theme::MONO_FONT)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(10.))
+        .line_height(px(12.))
+        .text_color(if lit { theme::text() } else { theme::muted() })
+        .child(key.into())
 }

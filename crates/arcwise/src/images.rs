@@ -39,9 +39,17 @@ struct Entry {
     used: u64,
 }
 
+/// How an image is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Look {
+    Plain,
+    /// Black wherever the image is opaque: an icon to draw over a bright fill.
+    Silhouette,
+}
+
 #[derive(Default)]
 pub struct Images {
-    entries: HashMap<PathBuf, Entry>,
+    entries: HashMap<(PathBuf, Look), Entry>,
     bytes: usize,
     clock: u64,
     /// Evicted images, freed from the window's atlas on its next frame.
@@ -51,13 +59,18 @@ pub struct Images {
 impl Images {
     /// The image at `path`, starting to load it if it is not in memory.
     pub fn get(&mut self, path: &Path, cx: &mut Context<Self>) -> Image {
+        self.get_as(path, Look::Plain, cx)
+    }
+
+    pub fn get_as(&mut self, path: &Path, look: Look, cx: &mut Context<Self>) -> Image {
         self.clock += 1;
-        if let Some(entry) = self.entries.get_mut(path) {
+        let key = (path.to_owned(), look);
+        if let Some(entry) = self.entries.get_mut(&key) {
             entry.used = self.clock;
             return entry.image.clone();
         }
         self.entries.insert(
-            path.to_owned(),
+            key.clone(),
             Entry {
                 image: Image::Loading,
                 bytes: 0,
@@ -66,12 +79,11 @@ impl Images {
         );
         let task = cx.background_spawn({
             let path = path.to_owned();
-            async move { decode(&path) }
+            async move { decode(&path, look) }
         });
-        let path = path.to_owned();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let decoded = task.await;
-            this.update(cx, |this, cx| this.finish(path, decoded, cx))
+            this.update(cx, |this, cx| this.finish(key, decoded, cx))
                 .ok();
         })
         .detach();
@@ -85,11 +97,11 @@ impl Images {
 
     fn finish(
         &mut self,
-        path: PathBuf,
+        key: (PathBuf, Look),
         decoded: anyhow::Result<Arc<RenderImage>>,
         cx: &mut Context<Self>,
     ) {
-        let Some(entry) = self.entries.get_mut(&path) else {
+        let Some(entry) = self.entries.get_mut(&key) else {
             return;
         };
         match decoded {
@@ -99,7 +111,7 @@ impl Images {
                 self.bytes += entry.bytes;
             }
             Err(e) => {
-                if path.exists() {
+                if key.0.exists() {
                     eprintln!("arcwise: {e:#}");
                 }
                 entry.image = Image::Missing;
@@ -116,7 +128,7 @@ impl Images {
                 .iter()
                 .filter(|(_, e)| e.bytes > 0)
                 .min_by_key(|(_, e)| e.used)
-                .map(|(path, _)| path.clone())
+                .map(|(key, _)| key.clone())
             else {
                 break;
             };
@@ -137,7 +149,7 @@ impl Images {
     }
 }
 
-fn decode(path: &Path) -> anyhow::Result<Arc<RenderImage>> {
+fn decode(path: &Path, look: Look) -> anyhow::Result<Arc<RenderImage>> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let mut rgba = if path
         .extension()
@@ -149,9 +161,12 @@ fn decode(path: &Path) -> anyhow::Result<Arc<RenderImage>> {
             .with_context(|| format!("decoding {}", path.display()))?
             .into_rgba8()
     };
-    // RenderImage holds BGRA, whatever the buffer's type says.
     for px in rgba.pixels_mut() {
-        px.0.swap(0, 2);
+        match look {
+            // RenderImage holds BGRA, whatever the buffer's type says.
+            Look::Plain => px.0.swap(0, 2),
+            Look::Silhouette => px.0[..3].fill(0),
+        }
     }
     Ok(Arc::new(RenderImage::new([image::Frame::new(rgba)])))
 }
@@ -212,13 +227,20 @@ mod tests {
         image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
             .save(&path)
             .unwrap();
-        let image = decode(&path).unwrap();
+        let image = decode(&path, Look::Plain).unwrap();
+        assert_eq!(
+            &decode(&path, Look::Silhouette)
+                .unwrap()
+                .as_bytes(0)
+                .unwrap()[..4],
+            &[0, 0, 0, 255]
+        );
         assert_eq!(&image.as_bytes(0).unwrap()[..4], &[0, 0, 255, 255]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_missing_file_is_an_error() {
-        assert!(decode(Path::new("no/such/image.webp")).is_err());
+        assert!(decode(Path::new("no/such/image.webp"), Look::Plain).is_err());
     }
 }

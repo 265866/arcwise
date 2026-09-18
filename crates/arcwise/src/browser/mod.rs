@@ -1,5 +1,6 @@
 //! The main screen: header, map and lineup panel, over one library.
 
+mod board;
 mod chooser;
 mod header;
 
@@ -8,13 +9,12 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use arcwise_core::{Browse, Library, Start};
+use arcwise_core::{Browse, LandingKey, Library, Start};
 use gpui::{
     Bounds, Context, Entity, FocusHandle, Focusable, IntoElement, Pixels, Window, div, prelude::*,
 };
 
 use crate::images::{Image, Images};
-use crate::theme;
 
 pub struct Browser {
     library: Arc<Library>,
@@ -24,6 +24,10 @@ pub struct Browser {
     /// Where the map and agent pickers are, for opening their dropdowns under them.
     map_picker: Rc<Cell<Bounds<Pixels>>>,
     agent_picker: Rc<Cell<Bounds<Pixels>>>,
+    /// The space the map is fitted into.
+    map_area: Rc<Cell<Bounds<Pixels>>>,
+    /// The landing under the pointer, which shows its card.
+    hovered: Option<LandingKey>,
 }
 
 impl Browser {
@@ -38,6 +42,8 @@ impl Browser {
             focus: cx.focus_handle(),
             map_picker: Rc::default(),
             agent_picker: Rc::default(),
+            map_area: Rc::default(),
+            hovered: None,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -69,7 +75,7 @@ impl Render for Browser {
             .flex()
             .flex_col()
             .child(self.header(cx))
-            .child(div().flex_1().min_h_0().bg(theme::bg()))
+            .child(div().flex_1().min_h_0().flex().child(self.map_column(cx)))
             .children(self.chooser(window, cx))
     }
 }
