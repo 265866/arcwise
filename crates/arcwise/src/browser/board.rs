@@ -1,7 +1,10 @@
 //! The map column: the ability filter over the map, with a marker for every landing.
 
-use arcwise_core::{Landing, LandingKey};
-use gpui::{AnyElement, Context, Div, FontWeight, Hsla, IntoElement, Pixels, div, prelude::*, px};
+use arcwise_core::{Landing, LandingKey, Lineup, Point};
+use gpui::{
+    AnyElement, Context, Div, FontWeight, Hsla, IntoElement, PathBuilder, Pixels, canvas, div,
+    prelude::*, px,
+};
 
 use super::Browser;
 use crate::images::{Image, Look};
@@ -121,17 +124,35 @@ impl Browser {
                     .child(gpui::img(gpui::ImageSource::Render(map)).size_full())
             }));
         if ready {
+            // The selected landing last, so it draws over its neighbours.
             let markers: Vec<AnyElement> = self
                 .browse
                 .landings()
                 .iter()
+                .filter(|g| Some(g.key) != selected)
+                .chain(self.browse.selected_landing())
                 .map(|landing| {
                     self.landing_marker(landing, side, color, selected, cx)
                         .into_any_element()
                 })
                 .collect();
+            let stands: Vec<AnyElement> = self
+                .browse
+                .selected_landing()
+                .into_iter()
+                .flat_map(|landing| landing.lineups.iter().enumerate())
+                .filter_map(|(i, &id)| {
+                    let lineup = self.library.lineup(id)?;
+                    Some(
+                        self.stand_marker(i + 1, lineup, side, color, cx)
+                            .into_any_element(),
+                    )
+                })
+                .collect();
             square = square
+                .child(self.throw_paths(color))
                 .children(markers)
+                .children(stands)
                 .children(self.landing_card(side, color));
         } else {
             square = square.child(
@@ -243,6 +264,106 @@ impl Browser {
                         )
                     }),
             )
+    }
+
+    /// The selected landing's throws, from each stand spot to where it lands. The focused one
+    /// is solid; the others are dashed.
+    fn throw_paths(&self, color: Hsla) -> impl IntoElement {
+        let focus = self.peek_lineup.or(self.browse.selected_lineup());
+        let throws: Vec<(bool, Vec<Point>)> = self
+            .browse
+            .selected_landing()
+            .into_iter()
+            .flat_map(|landing| landing.lineups.iter())
+            .filter_map(|&id| {
+                let lineup = self.library.lineup(id)?;
+                let points = std::iter::once(lineup.stand.at())
+                    .chain(lineup.path.iter().copied())
+                    .collect();
+                Some((Some(id) == focus, points))
+            })
+            .collect();
+        canvas(
+            |_, _, _| {},
+            move |bounds, (), window, _| {
+                let to_px = |p: Point| {
+                    gpui::point(
+                        bounds.origin.x + bounds.size.width * (p.x / 100.),
+                        bounds.origin.y + bounds.size.height * (p.y / 100.),
+                    )
+                };
+                // The focused throw last, so it draws over the others.
+                for (focused, points) in throws
+                    .iter()
+                    .filter(|t| !t.0)
+                    .chain(throws.iter().filter(|t| t.0))
+                {
+                    let line = |width: f32, dashed: bool| {
+                        let mut path = PathBuilder::stroke(px(width));
+                        if dashed {
+                            path = path.dash_array(&[px(4.), px(5.)]);
+                        }
+                        let mut points = points.iter().map(|&p| to_px(p));
+                        path.move_to(points.next()?);
+                        for p in points {
+                            path.line_to(p);
+                        }
+                        path.build().ok()
+                    };
+                    if *focused {
+                        if let Some(glow) = line(8., false) {
+                            window.paint_path(glow, theme::alpha(color, 0.22));
+                        }
+                        if let Some(path) = line(2.5, false) {
+                            window.paint_path(path, color);
+                        }
+                    } else if let Some(path) = line(1.5, true) {
+                        window.paint_path(path, theme::alpha(color, 0.45));
+                    }
+                }
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// A numbered marker where the player stands for one lineup of the selected landing.
+    fn stand_marker(
+        &self,
+        number: usize,
+        lineup: &Lineup,
+        side: Pixels,
+        color: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let id = lineup.id;
+        let on = self.peek_lineup.or(self.browse.selected_lineup()) == Some(id);
+        let size = px(if on { 26. } else { 22. });
+        div()
+            .id(gpui::ElementId::Name(format!("stand-{id}").into()))
+            .absolute()
+            .left(side * (lineup.stand.x / 100.) - size / 2.)
+            .top(side * (lineup.stand.y / 100.) - size / 2.)
+            .size(size)
+            .rounded(px(6.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(if on { color } else { theme::text().into() })
+            .text_color(if on {
+                gpui::black()
+            } else {
+                theme::bg().into()
+            })
+            .font_weight(FontWeight::EXTRA_BOLD)
+            .text_size(px(12.))
+            .shadow_md()
+            .cursor_pointer()
+            .child(number.to_string())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.browse.select_lineup(&this.library, id);
+                cx.notify();
+            }))
     }
 
     /// The card beside a hovered landing: what lands there and where it is thrown from.

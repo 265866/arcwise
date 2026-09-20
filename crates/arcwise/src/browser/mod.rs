@@ -9,7 +9,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use arcwise_core::{Browse, LandingKey, Library, Start};
+use arcwise_core::{Browse, LandingKey, Library, LineupId, Start};
 use gpui::{
     Bounds, Context, Entity, FocusHandle, Focusable, IntoElement, Pixels, Window, div, prelude::*,
 };
@@ -28,6 +28,8 @@ pub struct Browser {
     map_area: Rc<Cell<Bounds<Pixels>>>,
     /// The landing under the pointer, which shows its card.
     hovered: Option<LandingKey>,
+    /// A lineup pointed at in the panel, whose throw the map highlights.
+    peek_lineup: Option<LineupId>,
 }
 
 impl Browser {
@@ -44,6 +46,7 @@ impl Browser {
             agent_picker: Rc::default(),
             map_area: Rc::default(),
             hovered: None,
+            peek_lineup: None,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
