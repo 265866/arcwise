@@ -1,0 +1,516 @@
+//! The lineup panel: what the selected lineup is, where to stand, aim and throw, and how.
+
+use std::sync::Arc;
+
+use arcwise_core::{Landing, Lineup, Tag, View};
+use gpui::{
+    AnyElement, Bounds, Context, Div, FontWeight, Hsla, IntoElement, PathBuilder, Pixels,
+    RenderImage, SharedString, canvas, div, point, prelude::*, px, size,
+};
+
+use super::Browser;
+use super::board::place;
+use crate::images::Image;
+use crate::{theme, ui};
+
+/// How far the stand view zooms into the map.
+const STAND_ZOOM: f32 = 3.;
+
+impl Browser {
+    pub(super) fn panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let landing = self.browse.selected_landing()?;
+        let lineup = self.library.lineup(self.browse.selected_lineup()?)?;
+        let agent = self.library.agent(&lineup.agent)?;
+        let color: Hsla = theme::agent(agent.color).into();
+        Some(
+            div()
+                .id("panel")
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .overflow_y_scroll()
+                .border_l_1()
+                .border_color(theme::line())
+                .bg(theme::panel())
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .min_w(px(520.))
+                        .px(px(24.))
+                        .py(px(20.))
+                        .child(self.panel_head(lineup, color, cx))
+                        .child(
+                            div()
+                                .font_family(theme::DISPLAY_FONT)
+                                .font_weight(FontWeight::BOLD)
+                                .text_size(px(22.))
+                                .line_height(px(26.))
+                                .child(lineup.title.clone()),
+                        )
+                        .child(route(lineup, color))
+                        .children(self.throw_from(landing, color, cx))
+                        .child(self.viewer(lineup, color, cx))
+                        .child(self.step_tiles(lineup, color, cx))
+                        .children(technique(lineup, color)),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn panel_head(&self, lineup: &Lineup, color: Hsla, cx: &mut Context<Self>) -> Div {
+        let ability = self.library.ability(lineup.ability);
+        let icon = self
+            .image(&self.library.ability_icon(lineup.ability), cx)
+            .ready();
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .h(px(26.))
+                    .pl(px(6.))
+                    .pr(px(10.))
+                    .rounded(px(6.))
+                    .bg(theme::alpha(color, 0.16))
+                    .text_color(color)
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::BOLD)
+                    .children(icon.map(|icon| {
+                        gpui::img(gpui::ImageSource::Render(icon))
+                            .size(px(16.))
+                            .object_fit(gpui::ObjectFit::Contain)
+                    }))
+                    .children(ability.map(|a| a.name.clone())),
+            )
+            .children(lineup.tags.iter().filter_map(|tag| {
+                let (label, color) = match tag {
+                    Tag::Essential => ("Essential", gpui::rgb(0xf5c76a)),
+                    Tag::Pro => ("Pro", gpui::rgb(0xb99cff)),
+                    Tag::Other => return None,
+                };
+                Some(
+                    div()
+                        .h(px(22.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(5.))
+                        .border_1()
+                        .border_color(theme::alpha(color, 0.25))
+                        .text_color(color)
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::BOLD)
+                        .child(label),
+                )
+            }))
+    }
+
+    /// The other stand spots for the same landing, when there are any.
+    fn throw_from(&self, landing: &Landing, color: Hsla, cx: &mut Context<Self>) -> Option<Div> {
+        if landing.lineups.len() < 2 {
+            return None;
+        }
+        let selected = self.browse.selected_lineup();
+        let pills = landing.lineups.iter().enumerate().filter_map(|(i, &id)| {
+            let lineup = self.library.lineup(id)?;
+            let on = selected == Some(id);
+            Some(
+                div()
+                    .id(gpui::ElementId::Name(format!("from-{id}").into()))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .h(px(32.))
+                    .pl(px(5.))
+                    .pr(px(12.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if on { color } else { theme::line().into() })
+                    .when(on, |d| d.bg(theme::raised()))
+                    .text_color(if on { theme::text() } else { theme::muted() })
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .cursor_pointer()
+                    .hover(|s| {
+                        s.text_color(theme::text())
+                            .border_color(gpui::rgb(0x344050))
+                    })
+                    .child(number_box(i + 1, on.then_some(color)))
+                    .child(place(lineup.stand.callout.as_deref()))
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        this.peek_lineup = if *hovered {
+                            Some(id)
+                        } else {
+                            this.peek_lineup.filter(|&p| p != id)
+                        };
+                        cx.notify();
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.peek_lineup = None;
+                        this.browse.select_lineup(&this.library, id);
+                        cx.notify();
+                    })),
+            )
+        });
+        Some(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(6.))
+                .child(section_label("Throw from").mr(px(6.)))
+                .children(pills),
+        )
+    }
+
+    /// The big picture: the clip, or one step of the throw.
+    fn viewer(&self, lineup: &Lineup, color: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = self.peek_view.unwrap_or(self.browse.view());
+        let body = match view {
+            View::Clip => self.still(&self.library.start_still(lineup.id), cx),
+            View::Stand => self.stand_zoom(lineup, color, px(16.), cx),
+            View::Aim => match self.image(&self.library.aim_image(lineup.id), cx) {
+                Image::Missing => missing("This lineup has no aim picture. Follow the clip."),
+                image => picture(image.ready()),
+            },
+            View::Lands => match self.image(&self.library.end_still(lineup.id), cx) {
+                Image::Missing => missing("The landing frame for this clip is missing."),
+                image => picture(image.ready()),
+            },
+        };
+        let note = matches!(view, View::Clip | View::Aim)
+            .then(|| lineup.steps.as_ref()?.note.clone())
+            .flatten();
+        div()
+            .relative()
+            .w_full()
+            .aspect_ratio(16. / 9.)
+            .rounded(px(12.))
+            .overflow_hidden()
+            .border_1()
+            .border_color(theme::line())
+            .bg(gpui::black())
+            .child(body)
+            .children(note.map(|note| {
+                div()
+                    .absolute()
+                    .left(px(10.))
+                    .bottom(px(12.))
+                    .px(px(10.))
+                    .py(px(6.))
+                    .rounded(px(7.))
+                    .bg(theme::alpha(gpui::black(), 0.78))
+                    .text_size(px(13.))
+                    .child(note)
+            }))
+    }
+
+    fn still(&self, path: &std::path::Path, cx: &mut Context<Self>) -> AnyElement {
+        picture(self.image(path, cx).ready())
+    }
+
+    /// The map around the lineup's stand spot, with its throw.
+    fn stand_zoom(
+        &self,
+        lineup: &Lineup,
+        color: Hsla,
+        dot: Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let map = self
+            .image(&self.library.map_image(&lineup.map, lineup.side), cx)
+            .ready();
+        let stand = lineup.stand.at();
+        let land = lineup.land.at();
+        let throw: Vec<_> = std::iter::once(stand)
+            .chain(lineup.path.iter().copied())
+            .collect();
+        canvas(
+            |_, _, _| {},
+            move |bounds, (), window, _| {
+                let side = bounds.size.width * STAND_ZOOM;
+                let origin = point(
+                    bounds.center().x - side * (stand.x / 100.),
+                    bounds.center().y - side * (stand.y / 100.),
+                );
+                let to_px = |p: arcwise_core::Point| {
+                    point(
+                        origin.x + side * (p.x / 100.),
+                        origin.y + side * (p.y / 100.),
+                    )
+                };
+                window.paint_quad(gpui::fill(bounds, theme::bg()));
+                if let Some(map) = map {
+                    let image = Bounds::new(origin, size(side, side));
+                    window
+                        .paint_image(bounds, image, Default::default(), map, 0, false)
+                        .ok();
+                }
+                window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                    let mut path = PathBuilder::stroke(px(2.)).dash_array(&[px(6.), px(5.)]);
+                    let mut points = throw.iter().map(|&p| to_px(p));
+                    if let Some(first) = points.next() {
+                        path.move_to(first);
+                        for p in points {
+                            path.line_to(p);
+                        }
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, color);
+                        }
+                    }
+                    let r = bounds.size.width * 0.022;
+                    circle(window, to_px(land), r, color);
+                    circle(
+                        window,
+                        bounds.center(),
+                        dot / 2. + px(4.),
+                        theme::alpha(color, 0.35),
+                    );
+                    circle(window, bounds.center(), dot / 2., color);
+                });
+            },
+        )
+        .size_full()
+        .into_any_element()
+    }
+
+    fn step_tiles(&self, lineup: &Lineup, color: Hsla, cx: &mut Context<Self>) -> Div {
+        let view = self.peek_view.unwrap_or(self.browse.view());
+        let pinned = self.browse.view();
+        let aim = self.image(&self.library.aim_image(lineup.id), cx);
+        let has_aim = !matches!(aim, Image::Missing);
+        let tiles = [
+            (
+                View::Clip,
+                "Q",
+                "Watch",
+                self.tile_picture(&self.library.start_still(lineup.id), true, cx),
+                SharedString::from("full clip"),
+            ),
+            (
+                View::Stand,
+                "W",
+                "1 · Stand",
+                self.stand_zoom(lineup, color, px(9.), cx),
+                place(lineup.stand.callout.as_deref()).into(),
+            ),
+            (
+                View::Aim,
+                "E",
+                "2 · Aim",
+                if has_aim {
+                    tile_image(aim.ready(), false)
+                } else {
+                    div()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(12.))
+                        .text_color(theme::faint())
+                        .child("none")
+                        .into_any_element()
+                },
+                if has_aim { "crosshair" } else { "no picture" }.into(),
+            ),
+            (
+                View::Lands,
+                "R",
+                "3 · Lands",
+                self.tile_picture(&self.library.end_still(lineup.id), false, cx),
+                place(lineup.land.callout.as_deref()).into(),
+            ),
+        ];
+        div().flex().gap(px(8.)).children(tiles.into_iter().map(
+            |(tile_view, key, label, media, sub)| {
+                let on = tile_view == view;
+                let border: Hsla = if tile_view == pinned {
+                    color
+                } else if on {
+                    theme::text().into()
+                } else {
+                    gpui::transparent_black()
+                };
+                div()
+                    .id(label)
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.))
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .w_full()
+                            .aspect_ratio(16. / 9.)
+                            .rounded(px(8.))
+                            .overflow_hidden()
+                            .border_2()
+                            .border_color(border)
+                            .bg(gpui::black())
+                            .child(media),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(12.))
+                            .child(ui::kbd(key, false))
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .truncate()
+                            .child(sub),
+                    )
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        this.peek_view = if *hovered {
+                            Some(tile_view)
+                        } else {
+                            this.peek_view.filter(|&v| v != tile_view)
+                        };
+                        cx.notify();
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.peek_view = None;
+                        this.browse.set_view(tile_view);
+                        cx.notify();
+                    }))
+            },
+        ))
+    }
+
+    fn tile_picture(
+        &self,
+        path: &std::path::Path,
+        play: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        tile_image(self.image(path, cx).ready(), play)
+    }
+}
+
+fn picture(image: Option<Arc<RenderImage>>) -> AnyElement {
+    div()
+        .size_full()
+        .children(image.map(ui::cover))
+        .into_any_element()
+}
+
+fn tile_image(image: Option<Arc<RenderImage>>, play: bool) -> AnyElement {
+    div()
+        .relative()
+        .size_full()
+        .children(image.map(ui::cover))
+        .when(play, |d| d.child(ui::play_glyph(px(14.))))
+        .into_any_element()
+}
+
+fn missing(text: &'static str) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(theme::muted())
+        .child(text)
+        .into_any_element()
+}
+
+fn circle(
+    window: &mut gpui::Window,
+    center: gpui::Point<Pixels>,
+    r: Pixels,
+    color: impl Into<Hsla>,
+) {
+    let bounds = Bounds::new(point(center.x - r, center.y - r), size(r * 2., r * 2.));
+    window.paint_quad(gpui::fill(bounds, color.into()).corner_radii(r));
+}
+
+/// Stand → Lands, with their place names.
+fn route(lineup: &Lineup, color: Hsla) -> Div {
+    let part = |label: &'static str, callout: Option<&str>| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(ui::label(label).font_weight(FontWeight::BOLD))
+            .child(
+                div()
+                    .font_family(theme::DISPLAY_FONT)
+                    .font_weight(FontWeight::BOLD)
+                    .text_size(px(16.))
+                    .child(place(callout)),
+            )
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .child(part("Stand", lineup.stand.callout.as_deref()))
+        .child(ui::arrow(theme::faint(), color).mt(px(12.)))
+        .child(part("Lands", lineup.land.callout.as_deref()))
+}
+
+/// The throw's steps as a numbered list.
+fn technique(lineup: &Lineup, color: Hsla) -> Option<Div> {
+    let lines: Vec<String> = lineup.steps.as_ref()?.lines().collect();
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .px(px(14.))
+            .py(px(10.))
+            .rounded(px(10.))
+            .bg(theme::raised())
+            .children(lines.into_iter().enumerate().map(|(i, line)| {
+                div()
+                    .flex()
+                    .gap(px(10.))
+                    .line_height(px(22.))
+                    .child(
+                        div()
+                            .w(px(14.))
+                            .flex_none()
+                            .text_color(color)
+                            .font_weight(FontWeight::BOLD)
+                            .child(format!("{}.", i + 1)),
+                    )
+                    .child(div().flex_1().min_w_0().child(line))
+            })),
+    )
+}
+
+fn section_label(text: &'static str) -> Div {
+    ui::label(text).font_weight(FontWeight::BOLD)
+}
+
+/// The number of a stand spot, as on its map marker.
+fn number_box(n: usize, lit: Option<Hsla>) -> Div {
+    div()
+        .size(px(22.))
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(lit.unwrap_or_else(|| theme::text().into()))
+        .text_color(if lit.is_some() {
+            gpui::black()
+        } else {
+            theme::bg().into()
+        })
+        .font_weight(FontWeight::EXTRA_BOLD)
+        .text_size(px(12.))
+        .child(n.to_string())
+}

@@ -199,3 +199,73 @@ pub fn kbd(key: impl Into<SharedString>, lit: bool) -> Div {
         .text_color(if lit { theme::text() } else { theme::muted() })
         .child(key.into())
 }
+
+/// A play triangle centered in its parent.
+pub fn play_glyph(size: Pixels) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            let c = bounds.center();
+            let h = size / 2.;
+            let mut path = PathBuilder::fill();
+            path.add_polygon(
+                &[
+                    point(c.x - h * 0.6, c.y - h),
+                    point(c.x + h, c.y),
+                    point(c.x - h * 0.6, c.y + h),
+                ],
+                true,
+            );
+            if let Ok(path) = path.build() {
+                window.paint_path(path, theme::text());
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// A short arrow fading from `from` to `to`, pointing right.
+pub fn arrow(from: impl Into<Hsla>, to: impl Into<Hsla>) -> Div {
+    let (from, to) = (from.into(), to.into());
+    div()
+        .relative()
+        .w(px(34.))
+        .h(px(10.))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right(px(4.))
+                .top(px(4.))
+                .h(px(2.))
+                .bg(gpui::linear_gradient(
+                    90.,
+                    gpui::linear_color_stop(from, 0.),
+                    gpui::linear_color_stop(to, 1.),
+                )),
+        )
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, (), window, _| {
+                    let r = bounds.right();
+                    let c = bounds.center().y;
+                    let mut path = PathBuilder::fill();
+                    path.add_polygon(
+                        &[
+                            point(r - px(6.), c - px(5.)),
+                            point(r, c),
+                            point(r - px(6.), c + px(5.)),
+                        ],
+                        true,
+                    );
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, to);
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+}

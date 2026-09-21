@@ -3,13 +3,14 @@
 mod board;
 mod chooser;
 mod header;
+mod panel;
 
 use std::cell::Cell;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use arcwise_core::{Browse, LandingKey, Library, LineupId, Start};
+use arcwise_core::{Browse, LandingKey, Library, LineupId, Start, View};
 use gpui::{
     Bounds, Context, Entity, FocusHandle, Focusable, IntoElement, Pixels, Window, div, prelude::*,
 };
@@ -30,6 +31,8 @@ pub struct Browser {
     hovered: Option<LandingKey>,
     /// A lineup pointed at in the panel, whose throw the map highlights.
     peek_lineup: Option<LineupId>,
+    /// A step tile pointed at, which the viewer previews.
+    peek_view: Option<View>,
 }
 
 impl Browser {
@@ -47,6 +50,7 @@ impl Browser {
             map_area: Rc::default(),
             hovered: None,
             peek_lineup: None,
+            peek_view: None,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -78,7 +82,14 @@ impl Render for Browser {
             .flex()
             .flex_col()
             .child(self.header(cx))
-            .child(div().flex_1().min_h_0().flex().child(self.map_column(cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(self.map_column(cx))
+                    .children(self.panel(cx)),
+            )
             .children(self.chooser(window, cx))
     }
 }
