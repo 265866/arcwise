@@ -21,8 +21,9 @@ library/
     <lineup id>-aim.webp       optional: the crosshair at the moment of the throw
 ```
 
-Overhead maps are square, and every position in `library.json` is a percentage of the map's
-width (`x`) and height (`y`).
+Clips play through Windows Media Foundation, so any codec it decodes works. AV1 needs the AV1
+Video Extension from the Microsoft Store, which Windows 11 usually has. Overhead maps are square,
+and every position in `library.json` is a percentage of the map's width (`x`) and height (`y`).
 
 A missing image shows a placeholder.
 
