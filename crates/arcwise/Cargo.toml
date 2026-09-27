@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 arcwise-core.workspace = true
+arcwise-video.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }

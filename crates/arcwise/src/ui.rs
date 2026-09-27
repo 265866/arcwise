@@ -269,3 +269,52 @@ pub fn arrow(from: impl Into<Hsla>, to: impl Into<Hsla>) -> Div {
             .inset_0(),
         )
 }
+
+/// A turning ring, centered in its parent, for something on its way.
+pub fn spinner(size: Pixels) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            // Turns once every 800 ms, measured from a fixed point so redraws do not restart it.
+            static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            let t = EPOCH
+                .get_or_init(std::time::Instant::now)
+                .elapsed()
+                .as_secs_f32();
+            let turn = (t / 0.8).fract() * std::f32::consts::TAU;
+            let c = bounds.center();
+            let r = size / 2. - px(1.5);
+            let ring = |from: f32, sweep: f32, color: Hsla, window: &mut gpui::Window| {
+                let mut path = PathBuilder::stroke(px(3.));
+                let steps = 24;
+                for i in 0..=steps {
+                    let a = from + sweep * i as f32 / steps as f32;
+                    let p = point(c.x + r * a.cos(), c.y + r * a.sin());
+                    if i == 0 {
+                        path.move_to(p);
+                    } else {
+                        path.line_to(p);
+                    }
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, color);
+                }
+            };
+            ring(
+                0.,
+                std::f32::consts::TAU,
+                theme::alpha(gpui::white(), 0.19),
+                window,
+            );
+            ring(
+                turn,
+                std::f32::consts::FRAC_PI_2,
+                theme::text().into(),
+                window,
+            );
+            window.request_animation_frame();
+        },
+    )
+    .absolute()
+    .inset_0()
+}

@@ -12,6 +12,7 @@ publish = false
 [workspace.dependencies]
 anyhow = "1"
 arcwise-core = { path = "crates/arcwise-core" }
+arcwise-video = { path = "crates/arcwise-video" }
 # A commit on Zed's main branch; the crates.io release of gpui is a year behind it.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "52b2927a1bac46be5d50ad341ac00b665e13764b" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "52b2927a1bac46be5d50ad341ac00b665e13764b" }

@@ -16,6 +16,7 @@ use gpui::{
 };
 
 use crate::images::{Image, Images};
+use crate::player::Player;
 
 pub struct Browser {
     library: Arc<Library>,
@@ -33,6 +34,7 @@ pub struct Browser {
     peek_lineup: Option<LineupId>,
     /// A step tile pointed at, which the viewer previews.
     peek_view: Option<View>,
+    player: Entity<Player>,
 }
 
 impl Browser {
@@ -51,6 +53,7 @@ impl Browser {
             hovered: None,
             peek_lineup: None,
             peek_view: None,
+            player: cx.new(|_| Player::new()),
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -64,6 +67,16 @@ impl Browser {
     fn image(&self, path: &Path, cx: &mut Context<Self>) -> Image {
         self.images.update(cx, |images, cx| images.get(path, cx))
     }
+
+    /// Keeps the player on the selected lineup's clip, or stopped when nothing is selected.
+    fn sync_player(&self, cx: &mut Context<Self>) {
+        let selected = self.browse.selected_lineup();
+        let clip = selected.map(|id| (id, self.library.clip(id)));
+        self.player.update(cx, |player, cx| match clip {
+            Some((id, path)) => player.play(id, path, cx),
+            None => player.stop(cx),
+        });
+    }
 }
 
 impl Focusable for Browser {
@@ -75,6 +88,7 @@ impl Focusable for Browser {
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.images.update(cx, |images, _| images.release(window));
+        self.sync_player(cx);
         div()
             .track_focus(&self.focus)
             .size_full()

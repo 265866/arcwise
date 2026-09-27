@@ -7,6 +7,7 @@ mod app;
 mod args;
 mod browser;
 mod images;
+mod player;
 mod settings;
 mod theme;
 mod ui;
@@ -23,6 +24,9 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // GPUI slows windows without focus to about 30 frames a second, which made clips
+                // stutter while the game had focus: exactly when they are watched.
+                inactive_frame_interval: None,
                 titlebar: Some(TitlebarOptions {
                     title: Some("Arcwise".into()),
                     ..TitlebarOptions::default()

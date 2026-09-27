@@ -173,7 +173,12 @@ impl Browser {
     fn viewer(&self, lineup: &Lineup, color: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.peek_view.unwrap_or(self.browse.view());
         let body = match view {
-            View::Clip => self.still(&self.library.start_still(lineup.id), cx),
+            View::Clip => div()
+                .relative()
+                .size_full()
+                .child(self.still(&self.library.start_still(lineup.id), cx))
+                .child(div().absolute().inset_0().child(self.player.clone()))
+                .into_any_element(),
             View::Stand => self.stand_zoom(lineup, color, px(16.), cx),
             View::Aim => match self.image(&self.library.aim_image(lineup.id), cx) {
                 Image::Missing => missing("This lineup has no aim picture. Follow the clip."),
