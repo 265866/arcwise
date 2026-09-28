@@ -3,7 +3,10 @@
 mod board;
 mod chooser;
 mod header;
+mod keys;
 mod panel;
+
+pub use keys::bind as bind_keys;
 
 use std::cell::Cell;
 use std::path::Path;
@@ -91,6 +94,20 @@ impl Render for Browser {
         self.sync_player(cx);
         div()
             .track_focus(&self.focus)
+            .key_context(keys::CONTEXT)
+            .on_action(cx.listener(Self::next_landing))
+            .on_action(cx.listener(Self::previous_landing))
+            .on_action(cx.listener(Self::next_stand))
+            .on_action(cx.listener(Self::previous_stand))
+            .on_action(cx.listener(Self::watch_clip))
+            .on_action(cx.listener(Self::show_stand))
+            .on_action(cx.listener(Self::show_aim))
+            .on_action(cx.listener(Self::show_landing))
+            .on_action(cx.listener(Self::toggle_pause))
+            .on_action(cx.listener(Self::slow_motion))
+            .on_action(cx.listener(Self::switch_side))
+            .on_action(cx.listener(Self::close))
+            .on_key_down(cx.listener(Self::number_key))
             .size_full()
             .relative()
             .flex()

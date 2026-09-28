@@ -20,6 +20,7 @@ use crate::args::Args;
 fn main() {
     let args = Args::parse(std::env::args_os().skip(1));
     gpui_platform::application().run(move |cx: &mut App| {
+        browser::bind_keys(cx);
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
         cx.open_window(
             WindowOptions {

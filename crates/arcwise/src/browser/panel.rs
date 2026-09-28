@@ -53,7 +53,8 @@ impl Browser {
                         .children(self.throw_from(landing, color, cx))
                         .child(self.viewer(lineup, color, cx))
                         .child(self.step_tiles(lineup, color, cx))
-                        .children(technique(lineup, color)),
+                        .children(technique(lineup, color))
+                        .child(keys()),
                 )
                 .into_any_element(),
         )
@@ -518,4 +519,33 @@ fn number_box(n: usize, lit: Option<Hsla>) -> Div {
         .font_weight(FontWeight::EXTRA_BOLD)
         .text_size(px(12.))
         .child(n.to_string())
+}
+
+/// The keyboard shortcuts, along the panel's foot.
+fn keys() -> Div {
+    let hint = |keys: &[&'static str], what: &'static str| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .children(keys.iter().map(|k| ui::kbd(*k, false)))
+            .child(div().ml(px(2.)).child(what))
+    };
+    div()
+        .flex()
+        .flex_wrap()
+        .gap_x(px(18.))
+        .gap_y(px(8.))
+        .pt(px(14.))
+        .border_t_1()
+        .border_color(theme::line())
+        .text_size(px(12.))
+        .text_color(theme::faint())
+        .child(hint(&["↑", "↓"], "landing"))
+        .child(hint(&["←", "→"], "throw from"))
+        .child(hint(&["Q", "W", "E", "R"], "views"))
+        .child(hint(&["Space"], "pause"))
+        .child(hint(&["S"], "slow-mo"))
+        .child(hint(&["Tab"], "side"))
+        .child(hint(&["Esc"], "close"))
 }
