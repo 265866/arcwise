@@ -55,7 +55,7 @@ impl Browser {
 
     /// Whether keys should drive the map: not while a chooser covers it.
     fn keys_reach_map(&self) -> bool {
-        self.browse.chooser().is_none()
+        self.browse.chooser().is_none() && self.lightbox.is_none()
     }
 
     pub(super) fn next_landing(&mut self, _: &NextLanding, _: &mut Window, cx: &mut Context<Self>) {
@@ -140,12 +140,14 @@ impl Browser {
         }
     }
 
-    /// Closes the topmost thing: the chooser if it can close, otherwise the lineup.
+    /// Closes the topmost thing: the lightbox, the chooser if it can close, or the lineup.
     pub(super) fn close(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
-        if self.browse.chooser().is_some() {
-            self.browse.dismiss_chooser(&self.library);
-        } else {
-            self.browse.clear_selection();
+        if self.lightbox.take().is_none() {
+            if self.browse.chooser().is_some() {
+                self.browse.dismiss_chooser(&self.library);
+            } else {
+                self.browse.clear_selection();
+            }
         }
         self.keyed(cx);
     }

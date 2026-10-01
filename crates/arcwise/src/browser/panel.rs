@@ -190,10 +190,18 @@ impl Browser {
                 image => picture(image.ready()),
             },
         };
+        // The aim and landing pictures open full size when clicked.
+        let zoom = match view {
+            View::Aim => Some(self.library.aim_image(lineup.id)),
+            View::Lands => Some(self.library.end_still(lineup.id)),
+            View::Clip | View::Stand => None,
+        }
+        .filter(|path| matches!(self.image(path, cx), Image::Ready(_)));
         let note = matches!(view, View::Clip | View::Aim)
             .then(|| lineup.steps.as_ref()?.note.clone())
             .flatten();
         div()
+            .id("viewer")
             .relative()
             .w_full()
             .aspect_ratio(16. / 9.)
@@ -202,6 +210,13 @@ impl Browser {
             .border_1()
             .border_color(theme::line())
             .bg(gpui::black())
+            .when_some(zoom, |d, path| {
+                d.cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.lightbox = Some(path.clone());
+                        cx.notify();
+                    }))
+            })
             .child(body)
             .children(note.map(|note| {
                 div()

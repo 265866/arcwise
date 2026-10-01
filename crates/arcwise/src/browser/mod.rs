@@ -9,7 +9,7 @@ mod panel;
 pub use keys::bind as bind_keys;
 
 use std::cell::Cell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -38,6 +38,8 @@ pub struct Browser {
     /// A step tile pointed at, which the viewer previews.
     peek_view: Option<View>,
     player: Entity<Player>,
+    /// A picture shown over the whole window.
+    lightbox: Option<PathBuf>,
 }
 
 impl Browser {
@@ -57,6 +59,7 @@ impl Browser {
             peek_lineup: None,
             peek_view: None,
             player: cx.new(|_| Player::new()),
+            lightbox: None,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -122,6 +125,41 @@ impl Render for Browser {
                     .children(self.panel(cx)),
             )
             .children(self.chooser(window, cx))
+            .children(self.lightbox(cx))
+    }
+}
+
+impl Browser {
+    /// The picture in the lightbox, fitted to the window; any click closes it.
+    fn lightbox(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let path = self.lightbox.as_ref()?;
+        let image = self.image(path, cx).ready();
+        Some(
+            div()
+                .id("lightbox")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .px(gpui::relative(0.05))
+                .py(gpui::relative(0.05))
+                .bg(crate::theme::alpha(gpui::black(), 0.87))
+                .occlude()
+                .cursor_pointer()
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.lightbox = None;
+                        cx.notify();
+                    }),
+                )
+                .children(image.map(|image| {
+                    gpui::img(gpui::ImageSource::Render(image))
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Contain)
+                })),
+        )
     }
 }
 
