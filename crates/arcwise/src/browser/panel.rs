@@ -17,29 +17,39 @@ use crate::{theme, ui};
 const STAND_ZOOM: f32 = 3.;
 
 impl Browser {
-    pub(super) fn panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let landing = self.browse.selected_landing()?;
-        let lineup = self.library.lineup(self.browse.selected_lineup()?)?;
+    /// The panel at `open` of its full width, half the board's.
+    pub(super) fn panel(&self, open: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let lineup = self.library.lineup(self.shown?)?;
+        let landing = self
+            .browse
+            .landings()
+            .iter()
+            .find(|g| g.lineups.contains(&lineup.id));
         let agent = self.library.agent(&lineup.agent)?;
         let color: Hsla = theme::agent(agent.color).into();
         Some(
             div()
                 .id("panel")
-                .flex_1()
-                .min_w_0()
+                .flex_none()
+                .w(gpui::relative(open * 0.5))
                 .h_full()
+                .overflow_x_hidden()
                 .overflow_y_scroll()
                 .border_l_1()
-                .border_color(theme::line())
+                .border_color(theme::alpha(theme::line(), open))
                 .bg(theme::panel())
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(12.))
+                        // A fixed minimum width keeps the content from reflowing as the panel
+                        // grows and shrinks.
                         .min_w(px(520.))
                         .px(px(24.))
                         .py(px(20.))
+                        .ml(px(24. * (1. - open)))
+                        .opacity(open)
                         .child(self.panel_head(lineup, color, cx))
                         .child(
                             div()
@@ -50,7 +60,7 @@ impl Browser {
                                 .child(lineup.title.clone()),
                         )
                         .child(route(lineup, color))
-                        .children(self.throw_from(landing, color, cx))
+                        .children(landing.and_then(|g| self.throw_from(g, color, cx)))
                         .child(self.viewer(lineup, color, cx))
                         .child(self.step_tiles(lineup, color, cx))
                         .children(technique(lineup, color))

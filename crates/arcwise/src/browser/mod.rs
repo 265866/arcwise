@@ -5,6 +5,7 @@ mod chooser;
 mod header;
 mod keys;
 mod panel;
+mod slide;
 
 pub use keys::bind as bind_keys;
 
@@ -12,6 +13,7 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arcwise_core::{Browse, LandingKey, Library, LineupId, Start, View};
 use gpui::{
@@ -20,6 +22,7 @@ use gpui::{
 
 use crate::images::{Image, Images};
 use crate::player::Player;
+use slide::Slide;
 
 pub struct Browser {
     library: Arc<Library>,
@@ -40,6 +43,9 @@ pub struct Browser {
     player: Entity<Player>,
     /// A picture shown over the whole window.
     lightbox: Option<PathBuf>,
+    slide: Slide,
+    /// The lineup in the panel: the selected one, or the last one while the panel slides away.
+    shown: Option<LineupId>,
 }
 
 impl Browser {
@@ -60,6 +66,8 @@ impl Browser {
             peek_view: None,
             player: cx.new(|_| Player::new()),
             lightbox: None,
+            slide: Slide::closed(),
+            shown: None,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -74,10 +82,9 @@ impl Browser {
         self.images.update(cx, |images, cx| images.get(path, cx))
     }
 
-    /// Keeps the player on the selected lineup's clip, or stopped when nothing is selected.
+    /// Keeps the player on the shown lineup's clip, or stopped when the panel is closed.
     fn sync_player(&self, cx: &mut Context<Self>) {
-        let selected = self.browse.selected_lineup();
-        let clip = selected.map(|id| (id, self.library.clip(id)));
+        let clip = self.shown.map(|id| (id, self.library.clip(id)));
         self.player.update(cx, |player, cx| match clip {
             Some((id, path)) => player.play(id, path, cx),
             None => player.stop(cx),
@@ -94,6 +101,18 @@ impl Focusable for Browser {
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.images.update(cx, |images, _| images.release(window));
+        let now = Instant::now();
+        let selected = self.browse.selected_lineup();
+        self.slide.set(selected.is_some(), now);
+        let open = self.slide.at(now);
+        if self.slide.moving(now) {
+            window.request_animation_frame();
+        }
+        if selected.is_some() {
+            self.shown = selected;
+        } else if open == 0. {
+            self.shown = None;
+        }
         self.sync_player(cx);
         div()
             .track_focus(&self.focus)
@@ -122,7 +141,7 @@ impl Render for Browser {
                     .min_h_0()
                     .flex()
                     .child(self.map_column(cx))
-                    .children(self.panel(cx)),
+                    .children(self.panel(open, cx)),
             )
             .children(self.chooser(window, cx))
             .children(self.lightbox(cx))
