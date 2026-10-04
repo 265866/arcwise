@@ -3,6 +3,7 @@ name = "arcwise-video"
 description = "Hardware video decoding through Windows Media Foundation, for Arcwise"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
