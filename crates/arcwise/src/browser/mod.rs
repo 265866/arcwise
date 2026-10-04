@@ -83,10 +83,11 @@ impl Browser {
     }
 
     /// Keeps the player on the shown lineup's clip, or stopped when the panel is closed.
-    fn sync_player(&self, cx: &mut Context<Self>) {
+    fn sync_player(&self, window: &Window, cx: &mut Context<Self>) {
         let clip = self.shown.map(|id| (id, self.library.clip(id)));
+        let max_height = viewer_rows(window);
         self.player.update(cx, |player, cx| match clip {
-            Some((id, path)) => player.play(id, path, cx),
+            Some((id, path)) => player.play(id, path, max_height, cx),
             None => player.stop(cx),
         });
     }
@@ -113,7 +114,7 @@ impl Render for Browser {
         } else if open == 0. {
             self.shown = None;
         }
-        self.sync_player(cx);
+        self.sync_player(window, cx);
         div()
             .track_focus(&self.focus)
             .key_context(keys::CONTEXT)
@@ -189,6 +190,15 @@ fn plural(n: usize, word: &str) -> String {
     } else {
         format!("{n} {word}s")
     }
+}
+
+/// The most device pixel rows the viewer can show once the panel is open: half the window,
+/// less the panel's padding, at 16:9. Rounded up to a multiple of 90 rows (a 16th of 1440p),
+/// so small changes to the window do not reopen clips at a new size.
+fn viewer_rows(window: &Window) -> u32 {
+    let width = f32::from(window.viewport_size().width) / 2. - 48.;
+    let rows = (width * 9. / 16. * window.scale_factor()).max(360.);
+    (rows / 90.).ceil() as u32 * 90
 }
 
 #[cfg(test)]

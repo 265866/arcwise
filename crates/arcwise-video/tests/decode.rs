@@ -143,3 +143,15 @@ fn decodes_a_real_clip() {
     let fps = 60. / start.elapsed().as_secs_f64();
     assert!(fps > 30., "decodes faster than it plays: {fps:.0} fps");
 }
+
+#[test]
+fn scales_frames_down_to_a_height() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.open_scaled(1, fixture(), Some(90));
+    let frame = next_frame(&decoder, 1);
+    assert_eq!((frame.width, frame.height), (160, 90));
+    assert_eq!(frame.bgra.len(), 160 * 90 * 4);
+    decoder.open_scaled(2, fixture(), Some(1080));
+    let frame = next_frame(&decoder, 2);
+    assert_eq!((frame.width, frame.height), (320, 180), "never scaled up");
+}

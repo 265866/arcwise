@@ -102,14 +102,15 @@ impl Player {
     }
 
     /// Plays a lineup's clip from the start, unless it is the one already playing.
-    pub fn play(&mut self, id: LineupId, path: PathBuf, cx: &mut Context<Self>) {
+    /// Frames are scaled down to `max_height` rows, the most the viewer can show.
+    pub fn play(&mut self, id: LineupId, path: PathBuf, max_height: u32, cx: &mut Context<Self>) {
         if self.clip == Some(id) {
             return;
         }
         self.reset();
         self.clip = Some(id);
         match &self.decoder {
-            Ok(decoder) => decoder.open(self.generation, path),
+            Ok(decoder) => decoder.open_scaled(self.generation, path, Some(max_height)),
             Err(e) => self.failed = Some(e.clone()),
         }
         cx.notify();

@@ -44,7 +44,12 @@ pub fn run(commands: Receiver<Command>, frames: Sender<Frame>, events: Sender<Ev
 
     let mut next = commands.recv().ok();
     while let Some(command) = next.take() {
-        let Command::Open { generation, path } = command else {
+        let Command::Open {
+            generation,
+            path,
+            max_height,
+        } = command
+        else {
             next = commands.recv().ok();
             continue;
         };
@@ -55,7 +60,7 @@ pub fn run(commands: Receiver<Command>, frames: Sender<Frame>, events: Sender<Ev
             frames: &frames,
             events: &events,
         };
-        next = match clip.play(&path) {
+        next = match clip.play(&path, max_height) {
             Ok(command) => command,
             Err(e) => {
                 let error = format!("{}: {}", path.display(), e.message());
@@ -221,8 +226,8 @@ struct Clip<'a> {
 impl Clip<'_> {
     /// Plays the clip in a loop until a command arrives, and returns that command; `None` when
     /// the decoder has been dropped.
-    fn play(&self, path: &Path) -> windows::core::Result<Option<Command>> {
-        let reader = open(self.device, path)?;
+    fn play(&self, path: &Path, max_height: Option<u32>) -> windows::core::Result<Option<Command>> {
+        let reader = open(self.device, path, max_height)?;
         let (width, height, duration) = output_format(&reader)?;
         let _ = self.events.send(Event::Opened {
             generation: self.generation,
@@ -297,7 +302,11 @@ impl Clip<'_> {
     }
 }
 
-fn open(device: Option<&Device>, path: &Path) -> windows::core::Result<IMFSourceReader> {
+fn open(
+    device: Option<&Device>,
+    path: &Path,
+    max_height: Option<u32>,
+) -> windows::core::Result<IMFSourceReader> {
     // SAFETY: Media Foundation calls with valid arguments; the returned reader owns everything
     // it needs, including a reference to the device manager.
     unsafe {
@@ -317,6 +326,18 @@ fn open(device: Option<&Device>, path: &Path) -> windows::core::Result<IMFSource
         output.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
         // ARGB32 rather than RGB32: the video processor fills in alpha, and the UI draws with it.
         output.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_ARGB32)?;
+        let native = reader
+            .GetNativeMediaType(VIDEO, 0)?
+            .GetUINT64(&MF_MT_FRAME_SIZE)?;
+        let (width, height) = ((native >> 32) as u32, native as u32);
+        if let Some(max) = max_height.filter(|&max| max > 0 && max < height) {
+            // Even sizes: the video processor rejects odd ones for some formats.
+            let scaled = (u64::from(width) * u64::from(max) / u64::from(height)) as u32 & !1;
+            output.SetUINT64(
+                &MF_MT_FRAME_SIZE,
+                (u64::from(scaled) << 32) | u64::from(max & !1),
+            )?;
+        }
         reader.SetCurrentMediaType(VIDEO, None, &output)?;
         Ok(reader)
     }
