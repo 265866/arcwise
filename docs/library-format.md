@@ -25,7 +25,7 @@ Clips play through Windows Media Foundation, so any codec it decodes works. AV1 
 Video Extension from the Microsoft Store, which Windows 11 usually has. Overhead maps are square,
 and every position in `library.json` is a percentage of the map's width (`x`) and height (`y`).
 
-A missing image shows a placeholder.
+A missing image shows a placeholder, and a missing clip shows its first frame with a note.
 
 ## library.json
 

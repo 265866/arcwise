@@ -110,8 +110,11 @@ impl Player {
         self.reset();
         self.clip = Some(id);
         match &self.decoder {
-            Ok(decoder) => decoder.open_scaled(self.generation, path, Some(max_height)),
             Err(e) => self.failed = Some(e.clone()),
+            Ok(_) if !path.is_file() => {
+                self.failed = Some("This clip is missing from the library.".into());
+            }
+            Ok(decoder) => decoder.open_scaled(self.generation, path, Some(max_height)),
         }
         cx.notify();
     }
