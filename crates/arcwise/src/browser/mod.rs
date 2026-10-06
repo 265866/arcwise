@@ -46,6 +46,8 @@ pub struct Browser {
     slide: Slide,
     /// The lineup in the panel: the selected one, or the last one while the panel slides away.
     shown: Option<LineupId>,
+    /// The landing whose neighbours' stills were last fetched ahead.
+    prefetched: Option<LandingKey>,
 }
 
 impl Browser {
@@ -68,6 +70,7 @@ impl Browser {
             lightbox: None,
             slide: Slide::closed(),
             shown: None,
+            prefetched: None,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -80,6 +83,49 @@ impl Browser {
 
     fn image(&self, path: &Path, cx: &mut Context<Self>) -> Image {
         self.images.update(cx, |images, cx| images.get(path, cx))
+    }
+
+    /// Fetches the pictures the keys can reach next: every stand spot of the selected landing,
+    /// and the first of the landings either side, so stepping through them shows them at once.
+    fn prefetch(&mut self, cx: &mut Context<Self>) {
+        let landings = self.browse.landings();
+        let Some(at) = self
+            .browse
+            .selected_landing()
+            .and_then(|g| landings.iter().position(|l| l.key == g.key))
+        else {
+            return;
+        };
+        if self.prefetched == Some(landings[at].key) {
+            return;
+        }
+        self.prefetched = Some(landings[at].key);
+        let n = landings.len();
+        let ids: Vec<LineupId> = landings[at]
+            .lineups
+            .iter()
+            .copied()
+            .chain([
+                landings[(at + 1) % n].lineups[0],
+                landings[(at + n - 1) % n].lineups[0],
+            ])
+            .collect();
+        let mut paths: Vec<PathBuf> = ids
+            .into_iter()
+            .flat_map(|id| [self.library.start_still(id), self.library.end_still(id)])
+            .collect();
+        // Aim pictures are large; only those of the landing on screen.
+        paths.extend(
+            landings[at]
+                .lineups
+                .iter()
+                .map(|&id| self.library.aim_image(id)),
+        );
+        self.images.update(cx, |images, cx| {
+            for path in &paths {
+                images.prefetch(path, cx);
+            }
+        });
     }
 
     /// Keeps the player on the shown lineup's clip, or stopped when the panel is closed.
@@ -115,6 +161,7 @@ impl Render for Browser {
             self.shown = None;
         }
         self.sync_player(window, cx);
+        self.prefetch(cx);
         div()
             .track_focus(&self.focus)
             .key_context(keys::CONTEXT)
