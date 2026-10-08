@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
+use arcwise_core::{AgentId, MapId, Side};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -10,6 +11,15 @@ use serde::{Deserialize, Serialize};
 pub struct Settings {
     /// The library folder chosen last.
     pub library: Option<PathBuf>,
+    /// What was on screen last, to open on next time.
+    pub last: Option<Last>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Last {
+    pub map: MapId,
+    pub agent: AgentId,
+    pub side: Side,
 }
 
 impl Settings {
@@ -56,6 +66,11 @@ mod tests {
         let path = dir.join("nested").join("settings.json");
         let settings = Settings {
             library: Some(PathBuf::from(r"D:\lineups")),
+            last: Some(Last {
+                map: MapId::new("m-ascent"),
+                agent: AgentId::new("a-sova"),
+                side: Side::Defense,
+            }),
         };
         settings.write(&path).unwrap();
         assert_eq!(Settings::read(&path).unwrap(), settings);

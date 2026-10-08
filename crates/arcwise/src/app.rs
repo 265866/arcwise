@@ -10,8 +10,8 @@ use gpui::{
 };
 
 use crate::args::Args;
-use crate::browser::Browser;
-use crate::settings::Settings;
+use crate::browser::{Browser, Chosen};
+use crate::settings::{Last, Settings};
 use crate::theme;
 use crate::ui;
 
@@ -71,16 +71,25 @@ impl Arcwise {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(library) => {
-                        let start = this.start.take().map(|args| start(&library, args));
+                        let same_library = this.settings.library.as_ref() == Some(&path);
+                        let last = this.settings.last.clone().filter(|_| same_library);
+                        let start = start(&library, this.start.take().unwrap_or_default(), last);
                         let library = Arc::new(library);
-                        let browser =
-                            cx.new(|cx| Browser::new(library, start.unwrap_or_default(), cx));
+                        let browser = cx.new(|cx| Browser::new(library, start, cx));
+                        cx.subscribe(&browser, |this, _, chosen: &Chosen, _| {
+                            this.settings.last = Some(Last {
+                                map: chosen.map.clone(),
+                                agent: chosen.agent.clone(),
+                                side: chosen.side,
+                            });
+                            this.save_settings();
+                        })
+                        .detach();
                         this.screen = Screen::Browsing(browser);
-                        if this.settings.library.as_ref() != Some(&path) {
+                        if !same_library {
                             this.settings.library = Some(path);
-                            if let Err(e) = this.settings.save() {
-                                eprintln!("arcwise: could not save settings: {e:#}");
-                            }
+                            this.settings.last = None;
+                            this.save_settings();
                         }
                     }
                     Err(e) => {
@@ -93,6 +102,12 @@ impl Arcwise {
             })
         })
         .detach();
+    }
+
+    fn save_settings(&self) {
+        if let Err(e) = self.settings.save() {
+            eprintln!("arcwise: could not save settings: {e:#}");
+        }
     }
 
     fn choose_folder(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -190,8 +205,22 @@ impl Render for Arcwise {
     }
 }
 
-/// Resolves the command line's names against the library; unknown names are ignored.
-fn start(library: &Library, args: Args) -> Start {
+/// Where to open: the command line's choice when it makes one, otherwise what was on screen
+/// last. Names the library does not know are ignored.
+fn start(library: &Library, args: Args, last: Option<Last>) -> Start {
+    if args.map.is_none()
+        && args.agent.is_none()
+        && args.lineup.is_none()
+        && let Some(last) = last
+    {
+        return Start {
+            map: Some(last.map),
+            agent: Some(last.agent),
+            side: Some(args.side.unwrap_or(last.side)),
+            lineup: None,
+            view: args.view,
+        };
+    }
     Start {
         map: args
             .map
@@ -204,5 +233,69 @@ fn start(library: &Library, args: Args) -> Start {
         side: args.side,
         lineup: args.lineup,
         view: args.view,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arcwise_core::{AgentId, LineupId, MapId, Side};
+
+    use super::*;
+
+    fn library() -> Library {
+        Library::from_json(
+            "lib",
+            include_bytes!("../../arcwise-core/tests/fixtures/library.json"),
+        )
+        .unwrap()
+    }
+
+    fn last() -> Last {
+        Last {
+            map: MapId::new("m-bind"),
+            agent: AgentId::new("a-jett"),
+            side: Side::Defense,
+        }
+    }
+
+    #[test]
+    fn opens_where_it_was_left() {
+        let start = start(&library(), Args::default(), Some(last()));
+        assert_eq!(start.map, Some(MapId::new("m-bind")));
+        assert_eq!(start.agent, Some(AgentId::new("a-jett")));
+        assert_eq!(start.side, Some(Side::Defense));
+    }
+
+    #[test]
+    fn the_command_line_wins() {
+        let args = Args {
+            map: Some("ascent".into()),
+            agent: Some("Sova".into()),
+            ..Args::default()
+        };
+        let start = start(&library(), args, Some(last()));
+        assert_eq!(start.map, Some(MapId::new("m-ascent")));
+        assert_eq!(start.agent, Some(AgentId::new("a-sova")));
+        assert_eq!(start.side, None);
+    }
+
+    #[test]
+    fn a_lineup_on_the_command_line_wins_too() {
+        let args = Args {
+            lineup: Some(LineupId(5)),
+            ..Args::default()
+        };
+        let start = start(&library(), args, Some(last()));
+        assert_eq!(start.lineup, Some(LineupId(5)));
+        assert_eq!(start.map, None);
+    }
+
+    #[test]
+    fn unknown_names_are_ignored() {
+        let args = Args {
+            map: Some("Kasbah".into()),
+            ..Args::default()
+        };
+        assert_eq!(start(&library(), args, None).map, None);
     }
 }

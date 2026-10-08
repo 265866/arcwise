@@ -15,14 +15,23 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arcwise_core::{Browse, LandingKey, Library, LineupId, Start, View};
+use arcwise_core::{AgentId, Browse, LandingKey, Library, LineupId, MapId, Side, Start, View};
 use gpui::{
-    Bounds, Context, Entity, FocusHandle, Focusable, IntoElement, Pixels, Window, div, prelude::*,
+    Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Pixels, Window,
+    div, prelude::*,
 };
 
 use crate::images::{Image, Images};
 use crate::player::Player;
 use slide::Slide;
+
+/// Emitted when the map, agent or side on screen changes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chosen {
+    pub map: MapId,
+    pub agent: AgentId,
+    pub side: Side,
+}
 
 pub struct Browser {
     library: Arc<Library>,
@@ -48,7 +57,11 @@ pub struct Browser {
     shown: Option<LineupId>,
     /// The landing whose neighbours' stills were last fetched ahead.
     prefetched: Option<LandingKey>,
+    /// The choice last emitted as [`Chosen`].
+    chosen: Option<Chosen>,
 }
+
+impl EventEmitter<Chosen> for Browser {}
 
 impl Browser {
     pub fn new(library: Arc<Library>, start: Start, cx: &mut Context<Self>) -> Self {
@@ -71,6 +84,7 @@ impl Browser {
             slide: Slide::closed(),
             shown: None,
             prefetched: None,
+            chosen: None,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -83,6 +97,24 @@ impl Browser {
 
     fn image(&self, path: &Path, cx: &mut Context<Self>) -> Image {
         self.images.update(cx, |images, cx| images.get(path, cx))
+    }
+
+    fn emit_choice(&mut self, cx: &mut Context<Self>) {
+        let (Some(map), Some(agent)) = (self.browse.map(), self.browse.agent()) else {
+            return;
+        };
+        if !self.browse.can_close(&self.library) {
+            return;
+        }
+        let chosen = Chosen {
+            map: map.clone(),
+            agent: agent.clone(),
+            side: self.browse.side(),
+        };
+        if self.chosen.as_ref() != Some(&chosen) {
+            self.chosen = Some(chosen.clone());
+            cx.emit(chosen);
+        }
     }
 
     /// Fetches the pictures the keys can reach next: every stand spot of the selected landing,
@@ -162,6 +194,7 @@ impl Render for Browser {
         }
         self.sync_player(window, cx);
         self.prefetch(cx);
+        self.emit_choice(cx);
         div()
             .track_focus(&self.focus)
             .key_context(keys::CONTEXT)
