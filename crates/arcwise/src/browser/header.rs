@@ -12,6 +12,35 @@ impl Browser {
             .child(self.map_picker(cx))
             .child(self.agent_picker(cx))
             .children(self.side_switch(cx))
+            .child(div().flex_1())
+            .child(self.library_button(cx))
+    }
+
+    /// The library's folder name; clicking it opens another library.
+    fn library_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let name = self.library.root().file_name().map_or_else(
+            || self.library.root().display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        div()
+            .id("library")
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap(px(2.))
+            .px(px(10.))
+            .py(px(4.))
+            .rounded(px(8.))
+            .cursor_pointer()
+            .hover(|s| s.bg(theme::raised()))
+            .child(ui::label("Library"))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child(name),
+            )
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(super::ChangeLibrary)))
     }
 
     fn map_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {

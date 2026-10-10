@@ -63,6 +63,12 @@ pub struct Browser {
 
 impl EventEmitter<Chosen> for Browser {}
 
+/// Emitted when the user asks to open a different library.
+#[derive(Clone, Copy, Debug)]
+pub struct ChangeLibrary;
+
+impl EventEmitter<ChangeLibrary> for Browser {}
+
 impl Browser {
     pub fn new(library: Arc<Library>, start: Start, cx: &mut Context<Self>) -> Self {
         let images = cx.new(|_| Images::default());

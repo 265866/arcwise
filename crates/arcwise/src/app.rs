@@ -10,7 +10,7 @@ use gpui::{
 };
 
 use crate::args::Args;
-use crate::browser::{Browser, Chosen};
+use crate::browser::{Browser, ChangeLibrary, Chosen};
 use crate::settings::{Last, Settings};
 use crate::theme;
 use crate::ui;
@@ -85,6 +85,10 @@ impl Arcwise {
                             this.save_settings();
                         })
                         .detach();
+                        cx.subscribe(&browser, |this, _, _: &ChangeLibrary, cx| {
+                            this.pick_folder(cx);
+                        })
+                        .detach();
                         this.screen = Screen::Browsing(browser);
                         if !same_library {
                             this.settings.library = Some(path);
@@ -111,6 +115,11 @@ impl Arcwise {
     }
 
     fn choose_folder(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.pick_folder(cx);
+    }
+
+    /// Asks for a library folder and loads it.
+    fn pick_folder(&mut self, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
