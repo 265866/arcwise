@@ -28,6 +28,8 @@ fn main() {
                 // GPUI slows windows without focus to about 30 frames a second, which made clips
                 // stutter while the game had focus: exactly when they are watched.
                 inactive_frame_interval: None,
+                // Below this the map and panel no longer fit side by side.
+                window_min_size: Some(size(px(1100.), px(700.))),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Arcwise".into()),
                     ..TitlebarOptions::default()
