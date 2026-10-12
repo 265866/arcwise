@@ -34,7 +34,7 @@ fn next_frame(decoder: &Decoder, generation: u64) -> Frame {
 #[test]
 fn decodes_a_clip_to_bgra_frames() {
     let decoder = Decoder::spawn().unwrap();
-    decoder.open(1, fixture());
+    decoder.open(1, fixture(), None);
     assert_eq!(
         next_event(&decoder),
         Event::Opened {
@@ -66,7 +66,7 @@ fn decodes_a_clip_to_bgra_frames() {
 #[test]
 fn loops_with_presentation_times_that_keep_rising() {
     let decoder = Decoder::spawn().unwrap();
-    decoder.open(7, fixture());
+    decoder.open(7, fixture(), None);
     let mut last = None;
     for _ in 0..45 {
         let frame = next_frame(&decoder, 7);
@@ -84,9 +84,9 @@ fn loops_with_presentation_times_that_keep_rising() {
 #[test]
 fn a_new_clip_replaces_the_old_one() {
     let decoder = Decoder::spawn().unwrap();
-    decoder.open(1, fixture());
+    decoder.open(1, fixture(), None);
     next_frame(&decoder, 1);
-    decoder.open(2, fixture());
+    decoder.open(2, fixture(), None);
     let frame = next_frame(&decoder, 2);
     assert_eq!(frame.pts, Duration::ZERO, "starts from the beginning");
 }
@@ -94,10 +94,15 @@ fn a_new_clip_replaces_the_old_one() {
 #[test]
 fn reports_a_missing_file() {
     let decoder = Decoder::spawn().unwrap();
-    decoder.open(3, "no/such/clip.mp4");
+    decoder.open(3, "no/such/clip.mp4", None);
     match next_event(&decoder) {
-        Event::Failed { generation, error } => {
+        Event::Failed {
+            generation,
+            error,
+            codec_missing,
+        } => {
             assert_eq!(generation, 3);
+            assert!(!codec_missing);
             assert!(error.contains("clip.mp4"), "{error}");
         }
         other => panic!("expected a failure, got {other:?}"),
@@ -107,7 +112,7 @@ fn reports_a_missing_file() {
 #[test]
 fn stop_pauses_until_the_next_open() {
     let decoder = Decoder::spawn().unwrap();
-    decoder.open(1, fixture());
+    decoder.open(1, fixture(), None);
     next_frame(&decoder, 1);
     decoder.stop();
     // Drain what was decoded before the stop arrived.
@@ -120,7 +125,7 @@ fn stop_pauses_until_the_next_open() {
             .is_err(),
         "no frames after stop"
     );
-    decoder.open(2, fixture());
+    decoder.open(2, fixture(), None);
     next_frame(&decoder, 2);
 }
 
@@ -131,7 +136,7 @@ fn stop_pauses_until_the_next_open() {
 fn decodes_a_real_clip() {
     let path = std::env::var_os("ARCWISE_CLIP").expect("ARCWISE_CLIP is set");
     let decoder = Decoder::spawn().unwrap();
-    decoder.open(1, PathBuf::from(path));
+    decoder.open(1, PathBuf::from(path), None);
     let Event::Opened { width, height, .. } = next_event(&decoder) else {
         panic!("the clip did not open");
     };
@@ -147,11 +152,11 @@ fn decodes_a_real_clip() {
 #[test]
 fn scales_frames_down_to_a_height() {
     let decoder = Decoder::spawn().unwrap();
-    decoder.open_scaled(1, fixture(), Some(90));
+    decoder.open(1, fixture(), Some(90));
     let frame = next_frame(&decoder, 1);
     assert_eq!((frame.width, frame.height), (160, 90));
     assert_eq!(frame.bgra.len(), 160 * 90 * 4);
-    decoder.open_scaled(2, fixture(), Some(1080));
+    decoder.open(2, fixture(), Some(1080));
     let frame = next_frame(&decoder, 2);
     assert_eq!((frame.width, frame.height), (320, 180), "never scaled up");
 }

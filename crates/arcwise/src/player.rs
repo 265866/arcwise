@@ -114,7 +114,7 @@ impl Player {
             Ok(_) if !path.is_file() => {
                 self.failed = Some("This clip is missing from the library.".into());
             }
-            Ok(decoder) => decoder.open_scaled(self.generation, path, Some(max_height)),
+            Ok(decoder) => decoder.open(self.generation, path, Some(max_height)),
         }
         cx.notify();
     }
@@ -200,13 +200,18 @@ impl Player {
                         duration,
                         ..
                     } if generation == self.generation => self.duration = Some(duration),
-                    Event::Failed { generation, error } if generation == self.generation => {
-                        eprintln!("arcwise: {error}");
-                        self.failed = Some(
-                            "Windows can't play this clip. AV1 clips need the AV1 Video \
-                             Extension from the Microsoft Store."
-                                .into(),
-                        );
+                    Event::Failed {
+                        generation,
+                        error,
+                        codec_missing,
+                    } if generation == self.generation => {
+                        self.failed = Some(if codec_missing {
+                            "Windows has no decoder for this clip. AV1 clips need the AV1 \
+                             Video Extension from the Microsoft Store."
+                                .into()
+                        } else {
+                            format!("Windows can't play this clip. {error}").into()
+                        });
                     }
                     _ => {}
                 }

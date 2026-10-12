@@ -1,11 +1,10 @@
 //! The decode thread.
 
-use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, select};
-use windows::Win32::Foundation::{HANDLE, HMODULE};
+use windows::Win32::Foundation::{E_FAIL, HANDLE, HMODULE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Media::MediaFoundation::*;
@@ -23,25 +22,42 @@ const VIDEO: u32 = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
 const COPY_TIMEOUT_MS: u32 = 1000;
 
 pub fn run(commands: Receiver<Command>, frames: Sender<Frame>, events: Sender<Event>) {
-    // SAFETY: called once at the start of this thread, paired with the shutdown calls below.
-    let started = unsafe {
-        CoInitializeEx(None, COINIT_MULTITHREADED)
-            .ok()
-            .and_then(|()| MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET))
-    };
-    if let Err(e) = started {
-        // Answer every request with the failure, so the player shows it instead of waiting.
-        for command in commands {
-            if let Command::Open { generation, .. } = command {
-                let error = format!("Media Foundation is not available: {e}");
-                let _ = events.send(Event::Failed { generation, error });
+    // SAFETY: called once at the start of this thread; each successful call is balanced below.
+    let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok();
+    // SAFETY: as above.
+    let started = com
+        .clone()
+        .and_then(|()| unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET) });
+    match &started {
+        Ok(()) => decode(&commands, &frames, &events),
+        Err(e) => {
+            // Answer every request with the failure, so the player shows it instead of waiting.
+            for command in commands {
+                if let Command::Open { generation, .. } = command {
+                    let _ = events.send(Event::Failed {
+                        generation,
+                        error: format!("Media Foundation is not available: {}", e.message()),
+                        codec_missing: false,
+                    });
+                }
             }
         }
-        return;
     }
-    // Without a usable GPU, decode in software rather than not at all.
-    let device = Device::new().ok();
+    // SAFETY: balances the successful startup calls above; nothing of Media Foundation's is
+    // alive any more.
+    unsafe {
+        if started.is_ok() {
+            let _ = MFShutdown();
+        }
+        if com.is_ok() {
+            CoUninitialize();
+        }
+    }
+}
 
+fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<Event>) {
+    // Without a usable GPU, decode in software rather than not at all.
+    let mut device = Device::new().ok();
     let mut next = commands.recv().ok();
     while let Some(command) = next.take() {
         let Command::Open {
@@ -53,30 +69,32 @@ pub fn run(commands: Receiver<Command>, frames: Sender<Frame>, events: Sender<Ev
             next = commands.recv().ok();
             continue;
         };
-        let clip = Clip {
+        let mut clip = Clip {
             generation,
-            device: device.as_ref(),
-            commands: &commands,
-            frames: &frames,
-            events: &events,
+            device: device.as_mut(),
+            commands,
+            frames,
+            events,
         };
         next = match clip.play(&path, max_height) {
             Ok(command) => command,
             Err(e) => {
-                let error = format!("{}: {}", path.display(), e.message());
-                let _ = events.send(Event::Failed { generation, error });
+                let _ = events.send(Event::Failed {
+                    generation,
+                    error: format!("{}: {}", path.display(), e.message()),
+                    codec_missing: e.code() == MF_E_TOPO_CODEC_NOT_FOUND,
+                });
                 commands.recv().ok()
             }
         };
     }
+}
 
-    drop(device);
-    // SAFETY: balances the successful startup calls above; nothing of Media Foundation's is
-    // alive any more.
-    unsafe {
-        let _ = MFShutdown();
-        CoUninitialize();
-    }
+fn too_small(what: &str) -> windows::core::Error {
+    windows::core::Error::new(
+        MF_E_INVALIDMEDIATYPE,
+        format!("the decoded {what} is smaller than the frame"),
+    )
 }
 
 /// The GPU side: decoding, color conversion and the copy back to memory.
@@ -85,9 +103,9 @@ struct Device {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     /// Reused while frames keep the same size and format.
-    staging: RefCell<Option<(ID3D11Texture2D, D3D11_TEXTURE2D_DESC)>>,
+    staging: Option<(ID3D11Texture2D, D3D11_TEXTURE2D_DESC)>,
     fence: ID3D11Fence,
-    fence_value: Cell<u64>,
+    fence_value: u64,
     fence_event: HANDLE,
 }
 
@@ -127,9 +145,9 @@ impl Device {
                 manager,
                 device,
                 context,
-                staging: RefCell::default(),
+                staging: None,
                 fence: fence.ok_or_else(windows::core::Error::empty)?,
-                fence_value: Cell::default(),
+                fence_value: 0,
                 fence_event: CreateEventW(None, false, false, None)?,
             })
         }
@@ -137,7 +155,7 @@ impl Device {
 
     /// Copies a decoded texture into memory through a staging texture.
     fn read_back(
-        &self,
+        &mut self,
         buffer: &IMFDXGIBuffer,
         width: u32,
         height: u32,
@@ -152,8 +170,10 @@ impl Device {
             let subresource = buffer.GetSubresourceIndex()?;
             let mut desc = D3D11_TEXTURE2D_DESC::default();
             texture.GetDesc(&mut desc);
-            let mut staging = self.staging.borrow_mut();
-            let fits = matches!(&*staging, Some((_, d))
+            if desc.Width < width || desc.Height < height {
+                return Err(too_small("texture"));
+            }
+            let fits = matches!(&self.staging, Some((_, d))
                 if d.Width == desc.Width && d.Height == desc.Height && d.Format == desc.Format);
             if !fits {
                 let staging_desc = D3D11_TEXTURE2D_DESC {
@@ -168,29 +188,38 @@ impl Device {
                 let mut created = None;
                 self.device
                     .CreateTexture2D(&staging_desc, None, Some(&mut created))?;
-                *staging = Some((created.ok_or_else(windows::core::Error::empty)?, desc));
+                self.staging = Some((created.ok_or_else(windows::core::Error::empty)?, desc));
             }
-            let Some((target, _)) = staging.as_ref() else {
-                unreachable!("created above");
+            let Some((target, _)) = &self.staging else {
+                return Err(windows::core::Error::empty());
             };
             self.context
                 .CopySubresourceRegion(target, 0, 0, 0, 0, &texture, subresource, None);
             // Wait for the copy in the kernel, so Map finds the data ready rather than spinning
             // in the driver. Media Foundation's own Lock2D waits with Sleep, whose granularity
             // dropped playback to 20 fps on some machines.
-            let value = self.fence_value.get() + 1;
-            self.fence_value.set(value);
+            self.fence_value += 1;
             self.context
                 .cast::<ID3D11DeviceContext4>()?
-                .Signal(&self.fence, value)?;
-            self.fence.SetEventOnCompletion(value, self.fence_event)?;
+                .Signal(&self.fence, self.fence_value)?;
+            self.fence
+                .SetEventOnCompletion(self.fence_value, self.fence_event)?;
             self.context.Flush();
-            WaitForSingleObject(self.fence_event, COPY_TIMEOUT_MS);
+            if WaitForSingleObject(self.fence_event, COPY_TIMEOUT_MS) != WAIT_OBJECT_0 {
+                return Err(windows::core::Error::new(
+                    E_FAIL,
+                    "the GPU did not finish copying a frame",
+                ));
+            }
 
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             self.context
                 .Map(target, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
             let row = width as usize * 4;
+            if (mapped.RowPitch as usize) < row {
+                self.context.Unmap(target, 0);
+                return Err(too_small("mapped row"));
+            }
             let mut pixels = vec![0u8; row * height as usize];
             let base = mapped.pData.cast::<u8>().cast_const();
             for (y, out) in pixels.chunks_exact_mut(row).enumerate() {
@@ -217,7 +246,7 @@ impl Drop for Device {
 /// One clip being played.
 struct Clip<'a> {
     generation: u64,
-    device: Option<&'a Device>,
+    device: Option<&'a mut Device>,
     commands: &'a Receiver<Command>,
     frames: &'a Sender<Frame>,
     events: &'a Sender<Event>,
@@ -226,9 +255,13 @@ struct Clip<'a> {
 impl Clip<'_> {
     /// Plays the clip in a loop until a command arrives, and returns that command; `None` when
     /// the decoder has been dropped.
-    fn play(&self, path: &Path, max_height: Option<u32>) -> windows::core::Result<Option<Command>> {
-        let reader = open(self.device, path, max_height)?;
-        let (width, height, duration) = output_format(&reader)?;
+    fn play(
+        &mut self,
+        path: &Path,
+        max_height: Option<u32>,
+    ) -> windows::core::Result<Option<Command>> {
+        let reader = open(self.device.as_deref(), path, max_height)?;
+        let (mut width, mut height, duration) = output_format(&reader)?;
         let _ = self.events.send(Event::Opened {
             generation: self.generation,
             width,
@@ -268,6 +301,10 @@ impl Clip<'_> {
                 rewind(&reader)?;
                 continue;
             }
+            if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
+                // A clip can change size partway; frames from here on have the new one.
+                (width, height, _) = output_format(&reader)?;
+            }
             let Some(sample) = sample else { continue };
             empty_loops = 0;
             let pts = loop_offset + Duration::from_nanos(timestamp.max(0) as u64 * 100);
@@ -288,14 +325,14 @@ impl Clip<'_> {
     }
 
     fn pixels(
-        &self,
+        &mut self,
         sample: &IMFSample,
         width: u32,
         height: u32,
     ) -> windows::core::Result<Vec<u8>> {
         // SAFETY: the buffer belongs to `sample`, which outlives this call.
         let buffer = unsafe { sample.GetBufferByIndex(0)? };
-        if let (Some(device), Ok(dxgi)) = (self.device, buffer.cast::<IMFDXGIBuffer>()) {
+        if let (Some(device), Ok(dxgi)) = (self.device.as_mut(), buffer.cast::<IMFDXGIBuffer>()) {
             return device.read_back(&dxgi, width, height);
         }
         lock_and_copy(&buffer.cast::<IMF2DBuffer2>()?, width, height)
@@ -374,8 +411,8 @@ fn rewind(reader: &IMFSourceReader) -> windows::core::Result<()> {
 fn lock_and_copy(buffer: &IMF2DBuffer2, width: u32, height: u32) -> windows::core::Result<Vec<u8>> {
     let row = width as usize * 4;
     let mut pixels = Vec::with_capacity(row * height as usize);
-    // SAFETY: the buffer is locked for reading, and rows are read within the reported pitch
-    // before it is unlocked.
+    // SAFETY: the buffer is locked for reading, and rows are read only once `rows_fit` has
+    // checked that every one lies inside the locked range, before it is unlocked.
     unsafe {
         let mut scanline0 = std::ptr::null_mut();
         let mut pitch = 0i32;
@@ -388,6 +425,11 @@ fn lock_and_copy(buffer: &IMF2DBuffer2, width: u32, height: u32) -> windows::cor
             &mut start,
             &mut len,
         )?;
+        let first = scanline0.offset_from(start);
+        if !rows_fit(first, pitch as isize, row, height as usize, len as usize) {
+            buffer.Unlock2D()?;
+            return Err(too_small("buffer"));
+        }
         for y in 0..height as isize {
             let src = scanline0.offset(y * pitch as isize);
             pixels.extend_from_slice(std::slice::from_raw_parts(src, row));
@@ -401,4 +443,54 @@ fn lock_and_copy(buffer: &IMF2DBuffer2, width: u32, height: u32) -> windows::cor
         }
     }
     Ok(pixels)
+}
+
+/// Whether `rows` rows of `row` bytes, the first starting `first` bytes into a buffer of `len`
+/// bytes and each `pitch` bytes after the last (negative for bottom-up images), all lie inside
+/// the buffer.
+fn rows_fit(first: isize, pitch: isize, row: usize, rows: usize, len: usize) -> bool {
+    if rows == 0 {
+        return true;
+    }
+    if pitch.unsigned_abs() < row {
+        return false;
+    }
+    let Some(last) = isize::try_from(rows - 1)
+        .ok()
+        .and_then(|n| n.checked_mul(pitch))
+        .and_then(|span| first.checked_add(span))
+    else {
+        return false;
+    };
+    let (low, high) = (first.min(last), first.max(last));
+    low >= 0
+        && (high as usize)
+            .checked_add(row)
+            .is_some_and(|end| end <= len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rows_fit;
+
+    #[test]
+    fn rows_must_lie_inside_the_buffer() {
+        // Four rows of 8 bytes, 16 apart: the last ends at 3 * 16 + 8 = 56.
+        assert!(rows_fit(0, 16, 8, 4, 56));
+        assert!(!rows_fit(0, 16, 8, 4, 55));
+        assert!(!rows_fit(-1, 16, 8, 4, 100), "starts before the buffer");
+        assert!(!rows_fit(0, 4, 8, 4, 100), "rows overlap");
+    }
+
+    #[test]
+    fn bottom_up_rows_run_backwards() {
+        // The first row is the last in memory.
+        assert!(rows_fit(48, -16, 8, 4, 56));
+        assert!(!rows_fit(40, -16, 8, 4, 56));
+    }
+
+    #[test]
+    fn no_rows_always_fit() {
+        assert!(rows_fit(0, 0, 8, 0, 0));
+    }
 }

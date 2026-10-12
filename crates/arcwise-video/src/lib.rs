@@ -42,6 +42,9 @@ pub enum Event {
     Failed {
         generation: u64,
         error: String,
+        /// Windows has no decoder for the clip's codec, such as AV1 without the AV1 Video
+        /// Extension.
+        codec_missing: bool,
     },
 }
 
@@ -78,13 +81,10 @@ impl Decoder {
 
     /// Starts playing `path` from its start, looping, in place of whatever was playing. Frames
     /// and events for it carry `generation`; anything with an older one can be dropped.
-    pub fn open(&self, generation: u64, path: impl Into<PathBuf>) {
-        self.open_scaled(generation, path, None);
-    }
-
-    /// Like [`Decoder::open`], but scales frames down on the GPU to at most `max_height` rows,
-    /// keeping the aspect ratio. Smaller frames are cheaper to copy back and draw.
-    pub fn open_scaled(&self, generation: u64, path: impl Into<PathBuf>, max_height: Option<u32>) {
+    ///
+    /// With `max_height`, frames are scaled down on the GPU to at most that many rows, keeping
+    /// the aspect ratio. Smaller frames are cheaper to copy back and draw.
+    pub fn open(&self, generation: u64, path: impl Into<PathBuf>, max_height: Option<u32>) {
         // Sending fails only once the thread has gone, which reports itself through an event.
         let _ = self.commands.send(Command::Open {
             generation,
