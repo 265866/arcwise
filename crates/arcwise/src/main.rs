@@ -7,6 +7,7 @@ mod app;
 mod args;
 mod browser;
 mod images;
+mod pacing;
 mod player;
 mod settings;
 mod theme;

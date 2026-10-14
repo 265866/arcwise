@@ -12,73 +12,22 @@ use gpui::{
     prelude::*, px,
 };
 
+use crate::pacing::{Pacing, Speed};
 use crate::{theme, ui};
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Speed {
-    #[default]
-    Full,
-    Half,
-    Quarter,
-}
-
-impl Speed {
-    fn factor(self) -> f64 {
-        match self {
-            Speed::Full => 1.,
-            Speed::Half => 0.5,
-            Speed::Quarter => 0.25,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Speed::Full => "1×",
-            Speed::Half => "½×",
-            Speed::Quarter => "¼×",
-        }
-    }
-
-    /// The next slower speed, back to full after the slowest.
-    fn next(self) -> Speed {
-        match self {
-            Speed::Full => Speed::Half,
-            Speed::Half => Speed::Quarter,
-            Speed::Quarter => Speed::Full,
-        }
-    }
-}
-
-/// Where the clip is: the media time at an instant of wall time.
-#[derive(Clone, Copy)]
-struct Clock {
-    anchor: Instant,
-    media: Duration,
-}
-
-impl Clock {
-    fn at(self, now: Instant, speed: Speed) -> Duration {
-        self.media
-            + now
-                .saturating_duration_since(self.anchor)
-                .mul_f64(speed.factor())
-    }
-}
 
 pub struct Player {
     decoder: Result<Decoder, SharedString>,
     generation: u64,
     clip: Option<LineupId>,
-    shown: Option<(Arc<RenderImage>, Duration)>,
-    /// Decoded, and waiting for its time.
-    next: Option<Frame>,
-    clock: Option<Clock>,
+    shown: Option<Arc<RenderImage>>,
+    pacing: Pacing<Frame>,
     duration: Option<Duration>,
-    speed: Speed,
-    /// When paused, the media time it stopped at.
-    paused: Option<Duration>,
+    /// Paused by the user.
+    paused: bool,
+    /// Out of view, so held still until it is back.
+    hidden: bool,
     failed: Option<SharedString>,
-    /// Frames replaced since the last render, to free from the window.
+    /// Frames replaced since they were last freed from the window.
     retired: Vec<Arc<RenderImage>>,
     ticking: bool,
 }
@@ -90,11 +39,10 @@ impl Player {
             generation: 0,
             clip: None,
             shown: None,
-            next: None,
-            clock: None,
+            pacing: Pacing::default(),
             duration: None,
-            speed: Speed::Full,
-            paused: None,
+            paused: false,
+            hidden: false,
             failed: None,
             retired: Vec::new(),
             ticking: false,
@@ -116,6 +64,7 @@ impl Player {
             }
             Ok(decoder) => decoder.open(self.generation, path, Some(max_height)),
         }
+        self.update_hold();
         cx.notify();
     }
 
@@ -134,121 +83,104 @@ impl Player {
     fn reset(&mut self) {
         self.generation += 1;
         self.clip = None;
-        self.next = None;
-        self.clock = None;
+        self.pacing.reset();
         self.duration = None;
-        self.paused = None;
+        self.paused = false;
         self.failed = None;
-        if let Some((image, _)) = self.shown.take() {
-            self.retired.push(image);
-        }
+        self.retired.extend(self.shown.take());
     }
 
     pub fn toggle_pause(&mut self, cx: &mut Context<Self>) {
-        let Some(clock) = self.clock else { return };
-        let now = Instant::now();
-        match self.paused.take() {
-            Some(media) => self.clock = Some(Clock { anchor: now, media }),
-            None => self.paused = Some(clock.at(now, self.speed)),
+        if self.clip.is_some() {
+            self.paused = !self.paused;
+            self.update_hold();
+            cx.notify();
         }
-        cx.notify();
+    }
+
+    /// Holds the clip still while the viewer shows something else, so frames are not decoded
+    /// and drawn for nobody, and lets it carry on from there when it is back in view.
+    pub fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.hidden == visible {
+            self.hidden = !visible;
+            self.update_hold();
+            cx.notify();
+        }
+    }
+
+    fn update_hold(&mut self) {
+        let now = Instant::now();
+        if self.paused || self.hidden {
+            self.pacing.hold(now);
+        } else {
+            self.pacing.release(now);
+        }
     }
 
     pub fn cycle_speed(&mut self, cx: &mut Context<Self>) {
-        let now = Instant::now();
-        if let (Some(clock), None) = (self.clock.as_mut(), self.paused) {
-            *clock = Clock {
-                anchor: now,
-                media: clock.at(now, self.speed),
-            };
-        }
-        self.speed = self.speed.next();
+        self.pacing
+            .set_speed(self.pacing.speed().next(), Instant::now());
         cx.notify();
     }
 
-    fn media_now(&self, now: Instant) -> Option<Duration> {
-        self.paused
-            .or_else(|| Some(self.clock?.at(now, self.speed)))
-    }
-
-    /// Takes the next frame off the decode thread, skipping any from an older clip.
-    fn peek(&mut self) -> Option<&Frame> {
-        let decoder = self.decoder.as_ref().ok()?;
-        while self.next.is_none() {
-            let frame = decoder.frames().try_recv().ok()?;
-            if frame.generation == self.generation {
-                self.next = Some(frame);
-            }
+    /// Frees replaced frames from the window. Call while rendering; the player is not always
+    /// on screen to do it itself.
+    pub fn release(&mut self, window: &mut Window) {
+        for image in self.retired.drain(..) {
+            window.drop_image(image).ok();
         }
-        self.next.as_ref()
     }
 
-    fn due(&mut self, now: Instant) -> bool {
-        let media = self.media_now(now);
-        let first = self.clock.is_none();
-        self.peek()
-            .is_some_and(|frame| first || media.is_some_and(|m| frame.pts <= m))
-    }
-
-    /// Shows the newest frame that is due, dropping any it overtook.
-    fn advance(&mut self, now: Instant) {
-        if let Ok(decoder) = &self.decoder {
-            for event in decoder.events().try_iter() {
-                match event {
-                    Event::Opened {
-                        generation,
-                        duration,
-                        ..
-                    } if generation == self.generation => self.duration = Some(duration),
-                    Event::Failed {
-                        generation,
-                        error,
-                        codec_missing,
-                    } if generation == self.generation => {
-                        self.failed = Some(if codec_missing {
-                            "Windows has no decoder for this clip. AV1 clips need the AV1 \
-                             Video Extension from the Microsoft Store."
-                                .into()
-                        } else {
-                            format!("Windows can't play this clip. {error}").into()
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let mut latest = None;
-        while self.due(now) {
-            let frame = self.next.take();
-            if self.clock.is_none() {
-                // The first frame shows as soon as it exists, and starts the clock.
-                if let Some(frame) = &frame {
-                    self.clock = Some(Clock {
-                        anchor: now,
-                        media: frame.pts,
+    fn handle_events(&mut self) {
+        let Ok(decoder) = &self.decoder else { return };
+        for event in decoder.events().try_iter() {
+            match event {
+                Event::Opened {
+                    generation,
+                    duration,
+                    ..
+                } if generation == self.generation => self.duration = Some(duration),
+                Event::Failed {
+                    generation,
+                    error,
+                    codec_missing,
+                } if generation == self.generation => {
+                    self.failed = Some(if codec_missing {
+                        "Windows has no decoder for this clip. AV1 clips need the AV1 Video \
+                         Extension from the Microsoft Store."
+                            .into()
+                    } else {
+                        format!("Windows can't play this clip. {error}").into()
                     });
                 }
-                latest = frame;
-                break;
+                _ => {}
             }
-            latest = frame;
         }
-        if let Some(frame) = latest
-            && let Some(image) = image(frame.width, frame.height, frame.bgra)
-            && let Some((old, _)) = self.shown.replace((image, frame.pts))
-        {
-            self.retired.push(old);
+    }
+
+    /// Takes the next frame of the current clip off the decode thread, skipping older clips'.
+    fn pull(
+        decoder: &Result<Decoder, SharedString>,
+        generation: u64,
+    ) -> impl FnMut() -> Option<Frame> {
+        let frames = decoder.as_ref().ok().map(|d| d.frames().clone());
+        move || loop {
+            let frame = frames.as_ref()?.try_recv().ok()?;
+            if frame.generation == generation {
+                return Some(frame);
+            }
         }
     }
 
     /// Runs once a frame while a clip plays, and redraws only when a new frame is due. A redraw
     /// every frame would cost more and show nothing new.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.clip.is_none() || self.failed.is_some() || self.paused.is_some() {
+        if self.clip.is_none() || self.failed.is_some() || self.pacing.is_held() {
             self.ticking = false;
             return;
         }
-        if self.due(Instant::now()) {
+        let pull = Self::pull(&self.decoder, self.generation);
+        if self.pacing.due(Instant::now(), pull) {
             cx.notify();
         }
         let this = cx.entity().downgrade();
@@ -258,7 +190,7 @@ impl Player {
     }
 
     fn progress(&self, now: Instant) -> f32 {
-        match (self.media_now(now), self.duration) {
+        match (self.pacing.media_now(now), self.duration) {
             (Some(media), Some(duration)) if !duration.is_zero() => {
                 (media.as_secs_f64() % duration.as_secs_f64() / duration.as_secs_f64()) as f32
             }
@@ -267,25 +199,28 @@ impl Player {
     }
 }
 
-fn image(width: u32, height: u32, bgra: Vec<u8>) -> Option<Arc<RenderImage>> {
-    let buffer = image::RgbaImage::from_raw(width, height, bgra)?;
+fn image(frame: Frame) -> Option<Arc<RenderImage>> {
+    let buffer = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)?;
     Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
 }
 
 impl Render for Player {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        for image in self.retired.drain(..) {
-            window.drop_image(image).ok();
-        }
+        self.release(window);
         let now = Instant::now();
-        if self.clip.is_some() && self.paused.is_none() {
-            self.advance(now);
+        if self.clip.is_some() {
+            self.handle_events();
+            let pull = Self::pull(&self.decoder, self.generation);
+            if let Some(image) = self.pacing.advance(now, pull).and_then(image) {
+                self.retired.extend(self.shown.replace(image));
+            }
         }
-        if self.clip.is_some() && self.failed.is_none() && self.paused.is_none() && !self.ticking {
+        if self.clip.is_some() && self.failed.is_none() && !self.pacing.is_held() && !self.ticking {
             self.ticking = true;
             self.tick(window, cx);
         }
         let waiting = self.clip.is_some() && self.shown.is_none() && self.failed.is_none();
+        let speed = self.pacing.speed();
         div()
             .id("player")
             .relative()
@@ -295,13 +230,9 @@ impl Render for Player {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.toggle_pause(cx)),
             )
-            .children(
-                self.shown
-                    .as_ref()
-                    .map(|(image, _)| ui::cover(image.clone())),
-            )
+            .children(self.shown.clone().map(ui::cover))
             .when(waiting, |d| d.child(ui::spinner(px(34.))))
-            .when(self.paused.is_some(), |d| {
+            .when(self.paused, |d| {
                 d.child(
                     div()
                         .absolute()
@@ -342,14 +273,14 @@ impl Render for Player {
                     .items_center()
                     .justify_center()
                     .rounded(px(6.))
-                    .bg(if self.speed == Speed::Full {
+                    .bg(if speed == Speed::Full {
                         theme::alpha(gpui::black(), 0.72)
                     } else {
                         theme::accent().into()
                     })
                     .font_weight(FontWeight::BOLD)
                     .text_size(px(12.))
-                    .child(self.speed.label())
+                    .child(speed.label())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -373,34 +304,5 @@ impl Render for Player {
                             .bg(theme::text()),
                     ),
             )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn speeds_step_slower_then_wrap() {
-        assert_eq!(Speed::Full.next(), Speed::Half);
-        assert_eq!(Speed::Half.next(), Speed::Quarter);
-        assert_eq!(Speed::Quarter.next(), Speed::Full);
-    }
-
-    #[test]
-    fn the_clock_runs_at_the_speed() {
-        let anchor = Instant::now();
-        let clock = Clock {
-            anchor,
-            media: Duration::from_secs(2),
-        };
-        let later = anchor + Duration::from_secs(4);
-        assert_eq!(clock.at(later, Speed::Full), Duration::from_secs(6));
-        assert_eq!(clock.at(later, Speed::Quarter), Duration::from_secs(3));
-        assert_eq!(
-            clock.at(anchor - Duration::from_secs(1), Speed::Full),
-            Duration::from_secs(2),
-            "never runs backwards"
-        );
     }
 }

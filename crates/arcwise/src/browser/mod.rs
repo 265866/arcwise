@@ -167,12 +167,21 @@ impl Browser {
     }
 
     /// Keeps the player on the shown lineup's clip, or stopped when the panel is closed.
-    fn sync_player(&self, window: &Window, cx: &mut Context<Self>) {
+    /// The player is held still while the viewer shows a picture instead of the clip, or the
+    /// lightbox covers it, and frees the frames it replaced here because it is not always on
+    /// screen to do so itself.
+    fn sync_player(&self, window: &mut Window, cx: &mut Context<Self>) {
         let clip = self.shown.map(|id| (id, self.library.clip(id)));
         let max_height = viewer_rows(window);
-        self.player.update(cx, |player, cx| match clip {
-            Some((id, path)) => player.play(id, path, max_height, cx),
-            None => player.stop(cx),
+        let visible =
+            self.peek_view.unwrap_or(self.browse.view()) == View::Clip && self.lightbox.is_none();
+        self.player.update(cx, |player, cx| {
+            match clip {
+                Some((id, path)) => player.play(id, path, max_height, cx),
+                None => player.stop(cx),
+            }
+            player.set_visible(visible, cx);
+            player.release(window);
         });
     }
 }
