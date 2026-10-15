@@ -110,7 +110,9 @@ impl Browser {
                 Image::Loading
             )
         });
-        let ready = matches!(image, Image::Ready(_)) && icons_ready;
+        // A missing map picture still shows the landings, over a note saying it is missing.
+        let ready = !matches!(image, Image::Loading) && icons_ready;
+        let missing = matches!(image, Image::Missing);
         let color: Hsla = theme::agent(agent.color).into();
         let selected = self.browse.selected_landing().map(|g| g.key);
         let mut square = div()
@@ -123,6 +125,21 @@ impl Browser {
                     .inset_0()
                     .child(gpui::img(gpui::ImageSource::Render(map)).size_full())
             }));
+        if missing {
+            square = square.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(theme::line())
+                    .text_color(theme::faint())
+                    .child("This side's map picture is missing from the library."),
+            );
+        }
         if ready {
             // The selected landing last, so it draws over its neighbours.
             let markers: Vec<AnyElement> = self
