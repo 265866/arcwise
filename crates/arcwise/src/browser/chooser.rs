@@ -56,6 +56,7 @@ impl Browser {
                 .left_0()
                 .right_0()
                 .bottom_0()
+                .occlude()
                 .on_mouse_down(MouseButton::Left, dismiss)
                 .child(deferred(
                     anchored()
