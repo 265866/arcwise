@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use arcwise_core::LineupId;
 use arcwise_video::{Decoder, Event, Frame};
 use gpui::{
-    Context, FontWeight, IntoElement, MouseButton, RenderImage, SharedString, Window, div,
+    App, Context, FontWeight, IntoElement, MouseButton, RenderImage, SharedString, Window, div,
     prelude::*, px,
 };
 
@@ -128,6 +128,14 @@ impl Player {
     pub fn release(&mut self, window: &mut Window) {
         for image in self.retired.drain(..) {
             window.drop_image(image).ok();
+        }
+    }
+
+    /// Frees every frame the player holds, before it is dropped. Call outside any window's
+    /// update, so `drop_image` reaches every window.
+    pub fn release_all(&mut self, cx: &mut App) {
+        for image in self.retired.drain(..).chain(self.shown.take()) {
+            cx.drop_image(image, None);
         }
     }
 

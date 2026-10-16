@@ -95,8 +95,7 @@ impl Browser {
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
             let path = this.library.portrait(&agent.id);
-            this.images
-                .update(cx, |images, cx| images.prefetch(&path, cx));
+            this.images.update(cx, |images, cx| images.get(&path, cx));
         }
         this
     }
@@ -121,6 +120,13 @@ impl Browser {
             self.chosen = Some(chosen.clone());
             cx.emit(chosen);
         }
+    }
+
+    /// Frees every image and frame this screen holds, before it is dropped. Call outside any
+    /// window's update.
+    pub fn release_all(&mut self, cx: &mut Context<Self>) {
+        self.images.update(cx, |images, cx| images.clear(cx));
+        self.player.update(cx, |player, cx| player.release_all(cx));
     }
 
     /// Fetches the pictures the keys can reach next: every stand spot of the selected landing,
@@ -161,7 +167,7 @@ impl Browser {
         );
         self.images.update(cx, |images, cx| {
             for path in &paths {
-                images.prefetch(path, cx);
+                images.get(path, cx);
             }
         });
     }
@@ -194,7 +200,6 @@ impl Focusable for Browser {
 
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.images.update(cx, |images, _| images.release(window));
         let now = Instant::now();
         let selected = self.browse.selected_lineup();
         self.slide.set(selected.is_some(), now);

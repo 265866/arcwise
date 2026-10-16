@@ -2,14 +2,14 @@
 //!
 //! GPUI's own `img()` keeps every image it has loaded for the life of the app; browsing a few
 //! hundred lineups would hold gigabytes of stills. This store forgets the least recently used
-//! images past a budget and hands them back to the window to free their GPU memory.
+//! images past a budget and frees their GPU memory.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use gpui::{AsyncApp, Context, RenderImage, WeakEntity, Window, prelude::*};
+use gpui::{App, AsyncApp, Context, RenderImage, WeakEntity, prelude::*};
 
 /// Decoded pixels kept in memory, in bytes.
 const BUDGET: usize = 512 << 20;
@@ -49,14 +49,21 @@ pub enum Look {
 
 #[derive(Default)]
 pub struct Images {
-    entries: HashMap<(PathBuf, Look), Entry>,
+    /// One map per look, so a lookup by `&Path` needs no allocation.
+    plain: HashMap<PathBuf, Entry>,
+    silhouette: HashMap<PathBuf, Entry>,
     bytes: usize,
     clock: u64,
-    /// Evicted images, freed from the window's atlas on its next frame.
-    retired: Vec<Arc<RenderImage>>,
 }
 
 impl Images {
+    fn entries(&mut self, look: Look) -> &mut HashMap<PathBuf, Entry> {
+        match look {
+            Look::Plain => &mut self.plain,
+            Look::Silhouette => &mut self.silhouette,
+        }
+    }
+
     /// The image at `path`, starting to load it if it is not in memory.
     pub fn get(&mut self, path: &Path, cx: &mut Context<Self>) -> Image {
         self.get_as(path, Look::Plain, cx)
@@ -64,88 +71,96 @@ impl Images {
 
     pub fn get_as(&mut self, path: &Path, look: Look, cx: &mut Context<Self>) -> Image {
         self.clock += 1;
-        let key = (path.to_owned(), look);
-        if let Some(entry) = self.entries.get_mut(&key) {
-            entry.used = self.clock;
+        let used = self.clock;
+        if let Some(entry) = self.entries(look).get_mut(path) {
+            entry.used = used;
             return entry.image.clone();
         }
-        self.entries.insert(
-            key.clone(),
+        self.entries(look).insert(
+            path.to_owned(),
             Entry {
                 image: Image::Loading,
                 bytes: 0,
-                used: self.clock,
+                used,
             },
         );
+        let path = path.to_owned();
         let task = cx.background_spawn({
-            let path = path.to_owned();
+            let path = path.clone();
             async move { decode(&path, look) }
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let decoded = task.await;
-            this.update(cx, |this, cx| this.finish(key, decoded, cx))
+            this.update(cx, |this, cx| this.finish(path, look, decoded, cx))
                 .ok();
         })
         .detach();
         Image::Loading
     }
 
-    /// Starts loading `path` without waiting for it.
-    pub fn prefetch(&mut self, path: &Path, cx: &mut Context<Self>) {
-        self.get(path, cx);
-    }
-
     fn finish(
         &mut self,
-        key: (PathBuf, Look),
+        path: PathBuf,
+        look: Look,
         decoded: anyhow::Result<Arc<RenderImage>>,
         cx: &mut Context<Self>,
     ) {
-        let Some(entry) = self.entries.get_mut(&key) else {
+        let Some(entry) = self.entries(look).get_mut(&path) else {
             return;
         };
         match decoded {
             Ok(image) => {
-                entry.bytes = image.as_bytes(0).map_or(0, <[u8]>::len);
+                let bytes = image.as_bytes(0).map_or(0, <[u8]>::len);
+                entry.bytes = bytes;
                 entry.image = Image::Ready(image);
-                self.bytes += entry.bytes;
+                self.bytes += bytes;
             }
             Err(e) => {
-                if key.0.exists() {
+                if path.exists() {
                     eprintln!("arcwise: {e:#}");
                 }
                 entry.image = Image::Missing;
             }
         }
-        self.evict();
+        self.evict(cx);
         cx.notify();
     }
 
-    fn evict(&mut self) {
+    /// Forgets the least recently used images until the rest fit the budget. Runs only when a
+    /// decode finishes, outside any window's update, so `drop_image` reaches every window.
+    fn evict(&mut self, cx: &mut App) {
         while self.bytes > BUDGET {
-            let Some(oldest) = self
-                .entries
-                .iter()
-                .filter(|(_, e)| e.bytes > 0)
-                .min_by_key(|(_, e)| e.used)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            if let Some(entry) = self.entries.remove(&oldest) {
+            let oldest = [Look::Plain, Look::Silhouette]
+                .into_iter()
+                .flat_map(|look| {
+                    let entries = match look {
+                        Look::Plain => &self.plain,
+                        Look::Silhouette => &self.silhouette,
+                    };
+                    entries
+                        .iter()
+                        .filter(|(_, e)| e.bytes > 0)
+                        .map(move |(path, e)| (e.used, look, path.clone()))
+                })
+                .min_by_key(|(used, ..)| *used);
+            let Some((_, look, path)) = oldest else { break };
+            if let Some(entry) = self.entries(look).remove(&path) {
                 self.bytes -= entry.bytes;
                 if let Image::Ready(image) = entry.image {
-                    self.retired.push(image);
+                    cx.drop_image(image, None);
                 }
             }
         }
     }
 
-    /// Frees evicted images from the window. Call while rendering.
-    pub fn release(&mut self, window: &mut Window) {
-        for image in self.retired.drain(..) {
-            window.drop_image(image).ok();
+    /// Frees every image, before the store is dropped. Call outside any window's update.
+    pub fn clear(&mut self, cx: &mut App) {
+        for (_, entry) in self.plain.drain().chain(self.silhouette.drain()) {
+            if let Image::Ready(image) = entry.image {
+                cx.drop_image(image, None);
+            }
         }
+        self.bytes = 0;
     }
 }
 

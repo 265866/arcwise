@@ -29,6 +29,8 @@ pub struct Arcwise {
     screen: Screen,
     /// Where the command line asked to start; used by the first library only.
     start: Option<Args>,
+    /// Why the last library asked for could not be opened, shown over the one still open.
+    notice: Option<SharedString>,
 }
 
 impl Arcwise {
@@ -38,6 +40,7 @@ impl Arcwise {
             screen: Screen::Welcome { problem: None },
             settings,
             start: None,
+            notice: None,
         };
         match args {
             Err(problem) => {
@@ -59,8 +62,13 @@ impl Arcwise {
         this
     }
 
+    /// Loads the library at `path`. A library already open stays on screen until the new one has
+    /// loaded, and stays if it fails.
     fn load(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        self.screen = Screen::Loading(path.clone());
+        if !matches!(self.screen, Screen::Browsing(_)) {
+            self.screen = Screen::Loading(path.clone());
+        }
+        self.notice = None;
         cx.notify();
         let task = cx.background_spawn({
             let path = path.clone();
@@ -89,6 +97,9 @@ impl Arcwise {
                             this.pick_folder(cx);
                         })
                         .detach();
+                        if let Screen::Browsing(old) = &this.screen {
+                            old.update(cx, |old, cx| old.release_all(cx));
+                        }
                         this.screen = Screen::Browsing(browser);
                         if !same_library {
                             this.settings.library = Some(path);
@@ -97,15 +108,51 @@ impl Arcwise {
                         }
                     }
                     Err(e) => {
-                        this.screen = Screen::Welcome {
-                            problem: Some(format!("{:#}", anyhow::Error::from(e)).into()),
-                        };
+                        let problem = format!("{:#}", anyhow::Error::from(e)).into();
+                        if matches!(this.screen, Screen::Browsing(_)) {
+                            this.notice = Some(problem);
+                        } else {
+                            this.screen = Screen::Welcome {
+                                problem: Some(problem),
+                            };
+                        }
                     }
                 }
                 cx.notify();
             })
         })
         .detach();
+    }
+
+    /// A note along the bottom of the window; clicking it dismisses it.
+    fn notice_banner(&self, notice: SharedString, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(px(20.))
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .id("notice")
+                    .max_w(px(560.))
+                    .px(px(14.))
+                    .py(px(10.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(theme::alpha(theme::accent(), 0.4))
+                    .bg(theme::panel())
+                    .shadow_lg()
+                    .text_size(px(13.))
+                    .text_color(theme::attack())
+                    .cursor_pointer()
+                    .child(format!("Could not open that library: {notice}"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.notice = None;
+                        cx.notify();
+                    })),
+            )
     }
 
     fn save_settings(&self) {
@@ -195,7 +242,11 @@ impl Render for Arcwise {
             if !browser.focus_handle(cx).contains_focused(window, cx) {
                 browser.focus_handle(cx).focus(window, cx);
             }
-            return root.child(browser.clone());
+            return root.relative().child(browser.clone()).children(
+                self.notice
+                    .clone()
+                    .map(|notice| self.notice_banner(notice, cx)),
+            );
         }
         let body = match &self.screen {
             Screen::Welcome { problem } => self.welcome(problem.as_ref(), cx).into_any_element(),
