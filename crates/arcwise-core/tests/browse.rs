@@ -106,30 +106,34 @@ fn selecting_a_landing_selects_its_first_lineup() {
     let library = library();
     let mut browse = sova_on_ascent(&library);
     let key = browse.landings()[0].key;
-    browse.select_landing(&library, key);
+    browse.select_landing(key);
     assert_eq!(browse.selected_lineup(), Some(LineupId(1)));
-    browse.select_lineup(&library, LineupId(9));
+    browse.select_lineup(LineupId(9));
     assert_eq!(browse.selected_lineup(), Some(LineupId(9)));
-    browse.select_lineup(&library, LineupId(4));
+    browse.select_lineup(LineupId(4));
     assert_eq!(
         browse.selected_landing().unwrap().lineups,
         [LineupId(1), LineupId(2), LineupId(9)],
         "a lineup outside the landing does not move the selection"
     );
-    assert_eq!(browse.selected_lineup(), Some(LineupId(1)));
+    assert_eq!(
+        browse.selected_lineup(),
+        Some(LineupId(9)),
+        "and keeps the stand spot"
+    );
 }
 
 #[test]
 fn landing_keys_step_and_wrap() {
     let library = library();
     let mut browse = sova_on_ascent(&library);
-    browse.step_landing(&library, Direction::Previous);
+    browse.step_landing(Direction::Previous);
     assert_eq!(
         browse.selected_lineup(),
         Some(LineupId(4)),
         "up from nothing picks the last"
     );
-    browse.step_landing(&library, Direction::Next);
+    browse.step_landing(Direction::Next);
     assert_eq!(
         browse.selected_lineup(),
         Some(LineupId(1)),
@@ -137,7 +141,7 @@ fn landing_keys_step_and_wrap() {
     );
 
     browse.clear_selection();
-    browse.step_landing(&library, Direction::Next);
+    browse.step_landing(Direction::Next);
     assert_eq!(
         browse.selected_lineup(),
         Some(LineupId(1)),
@@ -149,18 +153,18 @@ fn landing_keys_step_and_wrap() {
 fn lineup_keys_step_through_a_landing() {
     let library = library();
     let mut browse = sova_on_ascent(&library);
-    browse.step_lineup(&library, Direction::Next);
+    browse.step_lineup(Direction::Next);
     assert_eq!(
         browse.selected_lineup(),
         None,
         "no landing, nothing to step through"
     );
 
-    browse.step_landing(&library, Direction::Next);
-    browse.step_lineup(&library, Direction::Next);
+    browse.step_landing(Direction::Next);
+    browse.step_lineup(Direction::Next);
     assert_eq!(browse.selected_lineup(), Some(LineupId(2)));
-    browse.step_lineup(&library, Direction::Previous);
-    browse.step_lineup(&library, Direction::Previous);
+    browse.step_lineup(Direction::Previous);
+    browse.step_lineup(Direction::Previous);
     assert_eq!(browse.selected_lineup(), Some(LineupId(9)));
 }
 
@@ -195,7 +199,7 @@ fn changing_side_clears_the_selection_and_resets_a_missing_ability() {
     let library = library();
     let mut browse = sova_on_ascent(&library);
     browse.set_ability(&library, Some(AbilityId(10)));
-    browse.step_landing(&library, Direction::Next);
+    browse.step_landing(Direction::Next);
     browse.set_view(View::Aim);
     browse.toggle_side(&library);
     assert_eq!(browse.side(), Side::Defense);

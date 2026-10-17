@@ -208,7 +208,7 @@ impl Browser {
         let icon = self
             .images
             .update(cx, |images, cx| {
-                images.get_as(&self.library.ability_icon(landing.ability), look, cx)
+                images.get_as(&self.library.ability_icon(landing.key.ability), look, cx)
             })
             .ready();
         let key = landing.key;
@@ -235,7 +235,7 @@ impl Browser {
             }))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.hovered = None;
-                this.browse.select_landing(&this.library, key);
+                this.browse.select_landing(key);
                 cx.notify();
             }))
             .child(
@@ -378,7 +378,7 @@ impl Browser {
             .cursor_pointer()
             .child(number.to_string())
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.browse.select_lineup(&this.library, id);
+                this.browse.select_lineup(id);
                 cx.notify();
             }))
     }
@@ -392,7 +392,7 @@ impl Browser {
         let landing = self.browse.landing(key)?;
         let ability = self
             .library
-            .ability(landing.ability)
+            .ability(landing.key.ability)
             .map_or("", |a| a.name.as_str());
         let from = landing
             .stands

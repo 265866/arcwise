@@ -2,7 +2,7 @@
 //! lineup, and which chooser is open. Every change goes through a method that leaves the state
 //! consistent with the library.
 
-use crate::landing::{Landing, LandingKey, cluster};
+use crate::landing::{Landing, LandingKey, cluster, tally};
 use crate::library::Library;
 use crate::model::{AbilityId, AgentId, Lineup, LineupId, MapId, Side};
 
@@ -18,10 +18,6 @@ pub enum View {
     Aim,
     /// Where it lands.
     Lands,
-}
-
-impl View {
-    pub const ALL: [View; 4] = [View::Clip, View::Stand, View::Aim, View::Lands];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,14 +44,28 @@ pub enum Direction {
 
 impl Direction {
     /// Steps `from` one place in this direction through `len` items, wrapping at either end.
-    /// From no place, Next goes to the first item and Previous to the last.
-    fn step(self, from: Option<usize>, len: usize) -> usize {
-        match (self, from) {
+    /// From no place, Next goes to the first item and Previous to the last. Nowhere to go when
+    /// there are no items.
+    fn step(self, from: Option<usize>, len: usize) -> Option<usize> {
+        let last = len.checked_sub(1)?;
+        Some(match (self, from) {
             (Direction::Next, None) => 0,
-            (Direction::Previous, None) => len - 1,
-            (Direction::Next, Some(i)) => (i + 1) % len,
-            (Direction::Previous, Some(i)) => (i + len - 1) % len,
-        }
+            (Direction::Previous, None) => last,
+            (Direction::Next, Some(i)) => {
+                if i >= last {
+                    0
+                } else {
+                    i + 1
+                }
+            }
+            (Direction::Previous, Some(i)) => {
+                if i == 0 || i > last {
+                    last
+                } else {
+                    i - 1
+                }
+            }
+        })
     }
 }
 
@@ -65,7 +75,7 @@ pub struct Browse {
     agent: Option<AgentId>,
     side: Side,
     ability: Option<AbilityId>,
-    landing: Option<LandingKey>,
+    /// The selected lineup; the selected landing is the one that holds it.
     lineup: Option<LineupId>,
     view: View,
     chooser: Option<Chooser>,
@@ -81,7 +91,6 @@ impl Browse {
             agent: start.agent.filter(|id| library.agent(id).is_some()),
             side: start.side.unwrap_or(Side::Attack),
             ability: None,
-            landing: None,
             lineup: None,
             view: start.view.unwrap_or_default(),
             chooser: None,
@@ -145,7 +154,8 @@ impl Browse {
     }
 
     pub fn selected_landing(&self) -> Option<&Landing> {
-        self.landing.and_then(|key| self.landing(key))
+        let id = self.lineup?;
+        self.landings.iter().find(|g| g.lineups.contains(&id))
     }
 
     pub fn selected_lineup(&self) -> Option<LineupId> {
@@ -176,13 +186,7 @@ impl Browse {
 
     /// The abilities with lineups on the chosen side, in slot order, with their counts.
     pub fn abilities(&self, library: &Library) -> Vec<(AbilityId, usize)> {
-        let mut counts: Vec<(AbilityId, usize)> = Vec::new();
-        for lineup in self.for_side(library) {
-            match counts.iter_mut().find(|(id, _)| *id == lineup.ability) {
-                Some((_, n)) => *n += 1,
-                None => counts.push((lineup.ability, 1)),
-            }
-        }
+        let mut counts = tally(self.for_side(library).map(|l| l.ability));
         counts.sort_by_key(|&(id, _)| library.slot(id));
         counts
     }
@@ -287,31 +291,34 @@ impl Browse {
         }
     }
 
-    pub fn select_landing(&mut self, library: &Library, key: LandingKey) {
-        self.landing = Some(key);
-        self.lineup = None;
-        self.settle(library);
-    }
-
-    /// Selects a lineup of the selected landing.
-    pub fn select_lineup(&mut self, library: &Library, id: LineupId) {
-        self.lineup = Some(id);
-        self.settle(library);
-    }
-
-    pub fn step_landing(&mut self, library: &Library, direction: Direction) {
-        if self.landings.is_empty() {
-            return;
+    /// Selects a landing and its first stand spot.
+    pub fn select_landing(&mut self, key: LandingKey) {
+        if let Some(landing) = self.landing(key) {
+            self.lineup = Some(landing.lineups[0]);
         }
+    }
+
+    /// Selects another stand spot of the selected landing.
+    pub fn select_lineup(&mut self, id: LineupId) {
+        if self
+            .selected_landing()
+            .is_some_and(|g| g.lineups.contains(&id))
+        {
+            self.lineup = Some(id);
+        }
+    }
+
+    pub fn step_landing(&mut self, direction: Direction) {
         let from = self
-            .landing
-            .and_then(|key| self.landings.iter().position(|g| g.key == key));
-        let to = direction.step(from, self.landings.len());
-        self.select_landing(library, self.landings[to].key);
+            .selected_landing()
+            .and_then(|g| self.landings.iter().position(|l| l.key == g.key));
+        if let Some(to) = direction.step(from, self.landings.len()) {
+            self.lineup = Some(self.landings[to].lineups[0]);
+        }
     }
 
     /// Steps through the selected landing's stand spots.
-    pub fn step_lineup(&mut self, library: &Library, direction: Direction) {
+    pub fn step_lineup(&mut self, direction: Direction) {
         let Some(landing) = self.selected_landing() else {
             return;
         };
@@ -319,8 +326,9 @@ impl Browse {
             .lineups
             .iter()
             .position(|&id| Some(id) == self.lineup);
-        let to = landing.lineups[direction.step(from, landing.lineups.len())];
-        self.select_lineup(library, to);
+        if let Some(to) = direction.step(from, landing.lineups.len()) {
+            self.lineup = Some(landing.lineups[to]);
+        }
     }
 
     pub fn set_view(&mut self, view: View) {
@@ -328,7 +336,6 @@ impl Browse {
     }
 
     pub fn clear_selection(&mut self) {
-        self.landing = None;
         self.lineup = None;
         self.view = View::Clip;
     }
@@ -352,24 +359,28 @@ impl Browse {
             self.for_side(library)
                 .filter(|l| ability.is_none_or(|a| l.ability == a)),
         );
-        let landing = self
-            .landing
-            .and_then(|key| self.landings.iter().find(|g| g.key == key))
-            .or_else(|| {
-                let lineup = self.lineup?;
-                self.landings.iter().find(|g| g.lineups.contains(&lineup))
-            });
-        match landing {
-            None => {
-                self.landing = None;
-                self.lineup = None;
-            }
-            Some(landing) => {
-                self.landing = Some(landing.key);
-                if !self.lineup.is_some_and(|id| landing.lineups.contains(&id)) {
-                    self.lineup = Some(landing.lineups[0]);
-                }
-            }
+        if self.selected_landing().is_none() {
+            self.lineup = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Direction;
+
+    #[test]
+    fn steps_wrap_at_either_end() {
+        assert_eq!(Direction::Next.step(None, 3), Some(0));
+        assert_eq!(Direction::Previous.step(None, 3), Some(2));
+        assert_eq!(Direction::Next.step(Some(2), 3), Some(0));
+        assert_eq!(Direction::Previous.step(Some(0), 3), Some(2));
+        assert_eq!(Direction::Next.step(Some(1), 3), Some(2));
+    }
+
+    #[test]
+    fn there_is_nowhere_to_step_in_nothing() {
+        assert_eq!(Direction::Next.step(None, 0), None);
+        assert_eq!(Direction::Previous.step(Some(4), 0), None);
     }
 }

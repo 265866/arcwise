@@ -73,7 +73,7 @@ impl Browser {
 
     fn step_landing(&mut self, direction: Direction, cx: &mut Context<Self>) {
         if self.keys_reach_map() {
-            self.browse.step_landing(&self.library, direction);
+            self.browse.step_landing(direction);
             self.keyed(cx);
         }
     }
@@ -93,7 +93,7 @@ impl Browser {
 
     fn step_stand(&mut self, direction: Direction, cx: &mut Context<Self>) {
         if self.keys_reach_map() {
-            self.browse.step_lineup(&self.library, direction);
+            self.browse.step_lineup(direction);
             self.keyed(cx);
         }
     }

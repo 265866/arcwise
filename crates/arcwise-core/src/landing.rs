@@ -18,7 +18,6 @@ pub struct Landing {
     pub key: LandingKey,
     /// The mean landing point of its lineups.
     pub at: Point,
-    pub ability: AbilityId,
     /// In the order they were given; the stand markers are numbered in this order.
     pub lineups: Vec<LineupId>,
     /// The most common landing callout, ties going to the one seen first.
@@ -62,7 +61,6 @@ pub fn cluster<'a>(lineups: impl IntoIterator<Item = &'a Lineup>) -> Vec<Landing
                     first: first.id,
                 },
                 at,
-                ability: first.ability,
                 lineups: members.iter().map(|l| l.id).collect(),
                 name: most_common(members.iter().filter_map(|l| l.land.callout.clone()))
                     .map(|(name, _)| name),
@@ -72,7 +70,7 @@ pub fn cluster<'a>(lineups: impl IntoIterator<Item = &'a Lineup>) -> Vec<Landing
         .collect()
 }
 
-fn tally<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Vec<(T, usize)> {
+pub(crate) fn tally<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Vec<(T, usize)> {
     let mut counts: Vec<(T, usize)> = Vec::new();
     for item in items {
         match counts.iter_mut().find(|(seen, _)| *seen == item) {

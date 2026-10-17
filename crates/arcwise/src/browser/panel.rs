@@ -164,7 +164,7 @@ impl Browser {
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.peek_lineup = None;
-                        this.browse.select_lineup(&this.library, id);
+                        this.browse.select_lineup(id);
                         cx.notify();
                     })),
             )
