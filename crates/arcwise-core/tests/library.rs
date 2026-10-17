@@ -118,10 +118,30 @@ fn rejects_an_ability_of_another_agent() {
 #[test]
 fn rejects_a_duplicate_lineup() {
     let json = replace(r#""id": 9, "map""#, r#""id": 8, "map""#);
-    assert!(matches!(
-        Library::from_json("lib", &json).unwrap_err(),
-        LoadError::Duplicate(LineupId(8))
-    ));
+    assert_eq!(
+        Library::from_json("lib", &json).unwrap_err().to_string(),
+        "lineup 8 is listed more than once"
+    );
+}
+
+#[test]
+fn rejects_duplicate_maps_agents_and_abilities() {
+    let message = |json: Vec<u8>| Library::from_json("lib", &json).unwrap_err().to_string();
+    assert_eq!(
+        message(replace(r#""id": "m-lotus""#, r#""id": "m-bind""#)),
+        "map m-bind is listed more than once"
+    );
+    assert_eq!(
+        message(replace(r#""id": "a-jett""#, r#""id": "a-brim""#)),
+        "agent a-brim is listed more than once"
+    );
+    assert_eq!(
+        message(replace(
+            r#""id": 30, "name": "Cloudburst""#,
+            r#""id": 20, "name": "Cloudburst""#
+        )),
+        "ability 20 is listed more than once"
+    );
 }
 
 #[test]

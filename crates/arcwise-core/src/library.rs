@@ -31,8 +31,8 @@ pub enum LoadError {
     Format { found: u32 },
     #[error("lineup {lineup} refers to {what}, which the library does not list")]
     Dangling { lineup: LineupId, what: String },
-    #[error("lineup {0} is listed more than once")]
-    Duplicate(LineupId),
+    #[error("{0} is listed more than once")]
+    Duplicate(String),
 }
 
 #[derive(Deserialize)]
@@ -65,10 +65,7 @@ impl Library {
             path: path.clone(),
             source,
         })?;
-        Self::from_json(root, &bytes).map_err(|e| match e {
-            LoadError::Parse { source, .. } => LoadError::Parse { path, source },
-            e => e,
-        })
+        Self::from_json(root, &bytes)
     }
 
     /// Parses a library whose media lives under `root`.
@@ -83,8 +80,8 @@ impl Library {
         }
         let mut library = Library {
             root,
-            map_index: index_by(&file.maps, |m| m.id.clone()),
-            agent_index: index_by(&file.agents, |a| a.id.clone()),
+            map_index: index_unique(&file.maps, "map", |m| m.id.clone())?,
+            agent_index: index_unique(&file.agents, "agent", |a| a.id.clone())?,
             ability_index: HashMap::new(),
             lineup_index: HashMap::new(),
             counts: HashMap::new(),
@@ -95,13 +92,15 @@ impl Library {
         for (a, agent) in library.agents.iter_mut().enumerate() {
             agent.abilities.sort_by_key(|ab| ab.slot);
             for (b, ability) in agent.abilities.iter().enumerate() {
-                library.ability_index.insert(ability.id, (a, b));
+                if library.ability_index.insert(ability.id, (a, b)).is_some() {
+                    return Err(LoadError::Duplicate(format!("ability {}", ability.id)));
+                }
             }
         }
         for (i, lineup) in library.lineups.iter_mut().enumerate() {
             lineup.tags.retain(|t| *t != Tag::Other);
             if library.lineup_index.insert(lineup.id, i).is_some() {
-                return Err(LoadError::Duplicate(lineup.id));
+                return Err(LoadError::Duplicate(format!("lineup {}", lineup.id)));
             }
         }
         for lineup in &library.lineups {
@@ -253,6 +252,19 @@ impl Library {
     }
 }
 
-fn index_by<T, K: std::hash::Hash + Eq>(items: &[T], key: impl Fn(&T) -> K) -> HashMap<K, usize> {
-    items.iter().enumerate().map(|(i, t)| (key(t), i)).collect()
+/// Each item's position by its key, refusing a key that appears twice.
+fn index_unique<T, K: std::hash::Hash + Eq + std::fmt::Display>(
+    items: &[T],
+    kind: &str,
+    key: impl Fn(&T) -> K,
+) -> Result<HashMap<K, usize>, LoadError> {
+    let mut index = HashMap::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        let k = key(item);
+        if index.contains_key(&k) {
+            return Err(LoadError::Duplicate(format!("{kind} {k}")));
+        }
+        index.insert(k, i);
+    }
+    Ok(index)
 }
