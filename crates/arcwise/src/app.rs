@@ -31,6 +31,8 @@ pub struct Arcwise {
     start: Option<Args>,
     /// Why the last library asked for could not be opened, shown over the one still open.
     notice: Option<SharedString>,
+    /// Library loads started, to tell the latest from older ones still running.
+    loads: u64,
 }
 
 impl Arcwise {
@@ -41,6 +43,7 @@ impl Arcwise {
             settings,
             start: None,
             notice: None,
+            loads: 0,
         };
         match args {
             Err(problem) => {
@@ -65,6 +68,9 @@ impl Arcwise {
     /// Loads the library at `path`. A library already open stays on screen until the new one has
     /// loaded, and stays if it fails.
     fn load(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // Only the latest request counts; one overtaken by another is dropped when it finishes.
+        self.loads += 1;
+        let load = self.loads;
         if !matches!(self.screen, Screen::Browsing(_)) {
             self.screen = Screen::Loading(path.clone());
         }
@@ -77,6 +83,9 @@ impl Arcwise {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
             this.update(cx, |this, cx| {
+                if this.loads != load {
+                    return;
+                }
                 match result {
                     Ok(library) => {
                         let same_library = this.settings.library.as_ref() == Some(&path);
@@ -136,6 +145,7 @@ impl Arcwise {
             .child(
                 div()
                     .id("notice")
+                    .occlude()
                     .max_w(px(560.))
                     .px(px(14.))
                     .py(px(10.))
