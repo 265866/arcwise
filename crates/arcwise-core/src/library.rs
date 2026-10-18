@@ -61,10 +61,7 @@ impl Library {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, LoadError> {
         let root = root.into();
         let path = root.join("library.json");
-        let bytes = std::fs::read(&path).map_err(|source| LoadError::Read {
-            path: path.clone(),
-            source,
-        })?;
+        let bytes = std::fs::read(&path).map_err(|source| LoadError::Read { path, source })?;
         Self::from_json(root, &bytes)
     }
 
