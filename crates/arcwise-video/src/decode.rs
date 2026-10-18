@@ -7,6 +7,7 @@ use crossbeam_channel::{Receiver, Sender, select};
 use windows::Win32::Foundation::{E_FAIL, HANDLE, HMODULE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET};
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
@@ -84,6 +85,11 @@ fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<
                     error: format!("{}: {}", path.display(), e.message()),
                     codec_missing: e.code() == MF_E_TOPO_CODEC_NOT_FOUND,
                 });
+                // A driver update or GPU reset takes the device away; make a new one for the
+                // next clip rather than failing every clip until a restart.
+                if e.code() == DXGI_ERROR_DEVICE_REMOVED || e.code() == DXGI_ERROR_DEVICE_RESET {
+                    device = Device::new().ok();
+                }
                 commands.recv().ok()
             }
         };
@@ -425,7 +431,8 @@ fn lock_and_copy(buffer: &IMF2DBuffer2, width: u32, height: u32) -> windows::cor
             &mut start,
             &mut len,
         )?;
-        let first = scanline0.offset_from(start);
+        // By address: the buffer may misreport, and offset_from needs both in one allocation.
+        let first = (scanline0.addr() as isize).wrapping_sub(start.addr() as isize);
         if !rows_fit(first, pitch as isize, row, height as usize, len as usize) {
             buffer.Unlock2D()?;
             return Err(too_small("buffer"));
