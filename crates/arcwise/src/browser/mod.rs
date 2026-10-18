@@ -38,9 +38,6 @@ pub struct Browser {
     browse: Browse,
     images: Entity<Images>,
     focus: FocusHandle,
-    /// Where the map and agent pickers are, for opening their dropdowns under them.
-    map_picker: Rc<Cell<Bounds<Pixels>>>,
-    agent_picker: Rc<Cell<Bounds<Pixels>>>,
     /// The space the map is fitted into.
     map_area: Rc<Cell<Bounds<Pixels>>>,
     /// The landing under the pointer, which shows its card.
@@ -79,8 +76,6 @@ impl Browser {
             browse,
             images,
             focus: cx.focus_handle(),
-            map_picker: Rc::default(),
-            agent_picker: Rc::default(),
             map_area: Rc::default(),
             hovered: None,
             peek_lineup: None,
@@ -235,7 +230,7 @@ impl Render for Browser {
             .relative()
             .flex()
             .flex_col()
-            .child(self.header(cx))
+            .child(self.header(window, cx))
             .child(
                 div()
                     .flex_1()

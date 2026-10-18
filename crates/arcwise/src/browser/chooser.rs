@@ -14,14 +14,19 @@ use crate::{theme, ui};
 const HEADER: Pixels = px(60.);
 
 impl Browser {
-    pub(super) fn chooser(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let which = self.browse.chooser()?;
-        let dropdown = self.browse.dropdown();
+    /// The chooser's card: the first-run dialog, or a dropdown's contents.
+    fn chooser_card(
+        &self,
+        which: Chooser,
+        dropdown: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let content = match which {
             Chooser::Map => self.map_choices(dropdown, cx),
             Chooser::Agent => self.agent_choices(dropdown, cx),
         };
-        let card = div()
+        div()
             .id("chooser-card")
             .flex()
             .flex_col()
@@ -37,19 +42,44 @@ impl Browser {
             .when(!dropdown, |d| {
                 d.px(px(26.)).pt(px(24.)).pb(px(26.)).rounded(px(16.))
             })
-            .child(content);
+            .child(content)
+    }
 
+    /// The dropdown under a header picker, while its chooser is open as one. Kept inside the
+    /// window, and drawn over everything else.
+    pub(super) fn dropdown(
+        &self,
+        which: Chooser,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        if !self.browse.dropdown() || self.browse.chooser() != Some(which) {
+            return None;
+        }
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .top(gpui::relative(1.))
+                .child(deferred(
+                    anchored()
+                        .offset(point(px(0.), px(8.)))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(self.chooser_card(which, true, window, cx)),
+                )),
+        )
+    }
+
+    /// What sits behind an open chooser: the first-run dialog's backdrop and card, or the layer
+    /// that closes a dropdown when clicked. That layer covers the board but not the header, so
+    /// the other picker still switches choosers in one click.
+    pub(super) fn chooser(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let which = self.browse.chooser()?;
         let dismiss = cx.listener(|this, _, _, cx| {
             this.browse.dismiss_chooser(&this.library);
             cx.notify();
         });
-        Some(if dropdown {
-            // Under its picker, kept inside the window. The layer behind it covers the board but
-            // not the header, so the other picker still switches choosers in one click.
-            let left = match which {
-                Chooser::Map => self.map_picker.get().origin.x,
-                Chooser::Agent => self.agent_picker.get().origin.x,
-            };
+        Some(if self.browse.dropdown() {
             div()
                 .absolute()
                 .top(HEADER)
@@ -58,14 +88,9 @@ impl Browser {
                 .bottom_0()
                 .occlude()
                 .on_mouse_down(MouseButton::Left, dismiss)
-                .child(deferred(
-                    anchored()
-                        .position(point(left, HEADER + px(8.)))
-                        .snap_to_window_with_margin(px(8.))
-                        .child(card),
-                ))
                 .into_any_element()
         } else {
+            let card = self.chooser_card(which, false, window, cx);
             div()
                 .id("chooser")
                 .absolute()

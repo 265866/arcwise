@@ -1,16 +1,18 @@
 //! The header: the map and agent pickers and the side switch.
 
 use arcwise_core::{Chooser, Side};
-use gpui::{Context, Div, FontWeight, IntoElement, MouseButton, SharedString, div, prelude::*, px};
+use gpui::{
+    Context, Div, FontWeight, IntoElement, MouseButton, SharedString, Window, div, prelude::*, px,
+};
 
 use super::Browser;
 use crate::{theme, ui};
 
 impl Browser {
-    pub(super) fn header(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn header(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         ui::bar()
-            .child(self.map_picker(cx))
-            .child(self.agent_picker(cx))
+            .child(self.map_picker(window, cx))
+            .child(self.agent_picker(window, cx))
             .children(self.side_switch(cx))
             .child(div().flex_1())
             .child(self.library_button(cx))
@@ -43,7 +45,7 @@ impl Browser {
             .on_click(cx.listener(|_, _, _, cx| cx.emit(super::ChangeLibrary)))
     }
 
-    fn map_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn map_picker(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let map = self.browse.map().and_then(|id| self.library.map(id));
         let thumb = map.map(|m| self.image(&self.library.map_card(&m.id), cx));
         picker(
@@ -59,7 +61,7 @@ impl Browser {
             "Map",
             map.map_or("Choose".into(), |m| m.name.clone().into()),
         )
-        .child(ui::measure(self.map_picker.clone()))
+        .children(self.dropdown(Chooser::Map, window, cx))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
@@ -69,7 +71,7 @@ impl Browser {
         )
     }
 
-    fn agent_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn agent_picker(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let agent = self.browse.agent().and_then(|id| self.library.agent(id));
         let face = match agent {
             Some(agent) => {
@@ -89,7 +91,7 @@ impl Browser {
             "Agent",
             agent.map_or("Choose".into(), |a| a.name.clone().into()),
         )
-        .child(ui::measure(self.agent_picker.clone()))
+        .children(self.dropdown(Chooser::Agent, window, cx))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
@@ -166,6 +168,7 @@ fn picker(
 ) -> gpui::Stateful<Div> {
     div()
         .id(id)
+        .relative()
         .flex()
         .items_center()
         .gap(px(10.))

@@ -187,17 +187,20 @@ impl Browser {
             View::Clip => div()
                 .relative()
                 .size_full()
-                .child(self.still(&self.library.start_still(lineup.id), cx))
+                .child(picture(
+                    self.image(&self.library.start_still(lineup.id), cx).ready(),
+                    false,
+                ))
                 .child(div().absolute().inset_0().child(self.player.clone()))
                 .into_any_element(),
             View::Stand => self.stand_zoom(lineup, color, px(16.), cx),
             View::Aim => match self.image(&self.library.aim_image(lineup.id), cx) {
                 Image::Missing => missing("This lineup has no aim picture. Follow the clip."),
-                image => picture(image.ready()),
+                image => picture(image.ready(), false),
             },
             View::Lands => match self.image(&self.library.end_still(lineup.id), cx) {
                 Image::Missing => missing("The landing frame for this clip is missing."),
-                image => picture(image.ready()),
+                image => picture(image.ready(), false),
             },
         };
         // The aim and landing pictures open full size when clicked.
@@ -240,10 +243,6 @@ impl Browser {
                     .text_size(px(13.))
                     .child(note)
             }))
-    }
-
-    fn still(&self, path: &std::path::Path, cx: &mut Context<Self>) -> AnyElement {
-        picture(self.image(path, cx).ready())
     }
 
     /// The map around the lineup's stand spot, with its throw.
@@ -321,7 +320,10 @@ impl Browser {
                 View::Clip,
                 "Q",
                 "Watch",
-                self.tile_picture(&self.library.start_still(lineup.id), true, cx),
+                picture(
+                    self.image(&self.library.start_still(lineup.id), cx).ready(),
+                    true,
+                ),
                 SharedString::from("full clip"),
             ),
             (
@@ -336,7 +338,7 @@ impl Browser {
                 "E",
                 "2 · Aim",
                 if has_aim {
-                    tile_image(aim.ready(), false)
+                    picture(aim.ready(), false)
                 } else {
                     div()
                         .size_full()
@@ -354,7 +356,10 @@ impl Browser {
                 View::Lands,
                 "R",
                 "3 · Lands",
-                self.tile_picture(&self.library.end_still(lineup.id), false, cx),
+                picture(
+                    self.image(&self.library.end_still(lineup.id), cx).ready(),
+                    false,
+                ),
                 place(lineup.land.callout.as_deref()).into(),
             ),
         ];
@@ -420,25 +425,10 @@ impl Browser {
             },
         ))
     }
-
-    fn tile_picture(
-        &self,
-        path: &std::path::Path,
-        play: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        tile_image(self.image(path, cx).ready(), play)
-    }
 }
 
-fn picture(image: Option<Arc<RenderImage>>) -> AnyElement {
-    div()
-        .size_full()
-        .children(image.map(ui::cover))
-        .into_any_element()
-}
-
-fn tile_image(image: Option<Arc<RenderImage>>, play: bool) -> AnyElement {
+/// A picture filling its box, with a play mark over it for the clip's tile.
+fn picture(image: Option<Arc<RenderImage>>, play: bool) -> AnyElement {
     div()
         .relative()
         .size_full()
