@@ -5,6 +5,7 @@ mod chooser;
 mod follow;
 mod header;
 mod keys;
+mod menu;
 mod panel;
 mod part;
 mod slide;
@@ -57,6 +58,8 @@ pub struct Browser {
     player: Entity<Player>,
     /// A picture shown over the whole window.
     lightbox: Option<PathBuf>,
+    /// Whether the settings menu is open.
+    menu_open: bool,
     slide: Slide,
     /// The lineup in the panel: the selected one, or the last one while the panel slides away.
     shown: Option<LineupId>,
@@ -96,6 +99,13 @@ pub struct ChangeLibrary;
 
 impl EventEmitter<ChangeLibrary> for Browser {}
 
+/// Emitted when the user turns background blur on or off, which [`crate::theme::blur`] already
+/// shows.
+#[derive(Clone, Copy, Debug)]
+pub struct SetBlur(pub bool);
+
+impl EventEmitter<SetBlur> for Browser {}
+
 impl Browser {
     /// A browser over `library`, opening at `start`, with `pictures` already decoded for it.
     pub fn new(
@@ -122,6 +132,7 @@ impl Browser {
             peek_view: None,
             player: cx.new(|_| Player::new()),
             lightbox: None,
+            menu_open: false,
             slide: Slide::closed(),
             shown: None,
             prefetched: None,
@@ -436,6 +447,7 @@ impl Render for Browser {
                     .children(self.clip_note());
                 d.child(Follow::new(self.clip_slot.clone(), player))
             })
+            .children(self.menu_layer(cx))
             .children(self.chooser(window, cx))
             .children(self.lightbox(cx));
         self.waiting = self.images.read(cx).waiting();

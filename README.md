@@ -34,13 +34,14 @@ Arcwise is a separate window, not an overlay: keep it on a second monitor while 
 | <kbd>Space</kbd> | Pause or play the clip |
 | <kbd>S</kbd> | Slow motion: ½×, then ¼×, then back to full speed |
 | <kbd>Tab</kbd> | Attack or defense |
-| <kbd>Esc</kbd> | Close the picture, chooser or lineup |
+| <kbd>Esc</kbd> | Close the picture, menu, chooser or lineup |
 
 ## Lineups
 
 Arcwise does not come with lineups or download any. It reads a library folder on your computer;
 [docs/library-format.md](docs/library-format.md) describes the layout. On first run it asks for
-the folder, and the header's library button opens another one.
+the folder, and the settings menu, behind the gear at the top right, opens another one. The
+same menu turns background blur on or off.
 
 ## Requirements
 
