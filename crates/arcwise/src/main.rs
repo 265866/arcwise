@@ -14,6 +14,7 @@ mod settings;
 mod theme;
 mod trace;
 mod ui;
+mod update;
 
 use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
 
@@ -44,6 +45,7 @@ fn main() {
     let settings = Settings::load();
     theme::set_blur(settings.blur);
     theme::set_strength(settings.blur_strength);
+    update::set_enabled(settings.auto_update);
     let preload = app::preload(&args, &settings);
     gpui_platform::application().run(move |cx: &mut App| {
         if trace::enabled() {

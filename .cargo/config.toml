@@ -1,3 +1,8 @@
 # Link the C runtime into the exe, so Arcwise runs on PCs without the Visual C++ redistributable.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# aws-lc, the crypto library behind the updater's TLS and signature checks, ships assembled
+# objects for this, so building it does not need NASM installed.
+[env]
+AWS_LC_SYS_PREBUILT_NASM = "1"
