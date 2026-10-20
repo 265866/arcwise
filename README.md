@@ -1,11 +1,45 @@
 # Arcwise
 
+[![CI](https://github.com/265866/arcwise/actions/workflows/ci.yml/badge.svg)](https://github.com/265866/arcwise/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/265866/arcwise)](https://github.com/265866/arcwise/releases/latest)
+
 A desktop lineup browser for Valorant. Pick a map and an agent, see where each piece of utility
 lands, and watch exactly where to stand, where to aim and how to throw.
 
 Arcwise is a separate window, not an overlay: keep it on a second monitor while you play.
 
 ![Choosing a map](docs/screenshots/choose-map.png)
+
+## Download
+
+Get the installer from the [latest release](https://github.com/265866/arcwise/releases/latest):
+`arcwise-<version>-x64-setup.exe`. It installs Arcwise for your Windows account only, so it
+never asks for administrator rights, and adds it to the Start Menu. The release also has a zip
+with the same `arcwise.exe` for running without installing.
+
+Arcwise isn't code-signed yet. When you run an installer or an `arcwise.exe` you downloaded,
+Windows may show "Windows protected your PC". Click **More info**, then **Run anyway**.
+
+Installing a newer version over an older one keeps your settings. To remove Arcwise, open
+**Settings** > **Apps**, find Arcwise in the list of installed apps, and choose **Uninstall**.
+The uninstaller asks whether to delete your settings too.
+
+### Check a download
+
+This repository's release workflow builds every release on GitHub, and signs a statement that
+names each file it built. The release attaches that statement as `attestation.json`. Download it
+next to your file. Then check the file with the [GitHub CLI](https://cli.github.com/). With
+`--bundle`, the check works without signing in:
+
+```powershell
+gh attestation verify arcwise-<version>-x64-setup.exe --repo 265866/arcwise --bundle attestation.json
+```
+
+It prints that verification succeeded, or why it failed.
+
+Each release also lists the files' SHA-256 hashes in `SHA256SUMS.txt`. To compare one in
+PowerShell, run `Get-FileHash arcwise-<version>-x64-setup.exe` and match its hash against the
+file's line. The hash in `SHA256SUMS.txt` is lowercase.
 
 ## What it does
 
@@ -43,56 +77,39 @@ Arcwise does not come with lineups or download any. It reads a library folder on
 the folder, and the settings menu, behind the gear at the top right, opens another one. The
 same menu turns background blur on or off and sets how much of it shows.
 
+## Updates
+
+When an installed Arcwise opens, it asks GitHub whether a newer release exists. If one does,
+Arcwise downloads its installer in the background and checks its attestation as
+`gh attestation verify` does. It also checks that the release workflow built that exact
+installer on `main`. A card then offers to restart into the new version now. Otherwise it
+installs when you close Arcwise. An installer that fails the check is deleted, and the card links
+to the releases page instead.
+
+An `arcwise.exe` run from the zip doesn't update itself. Get new versions from the
+[releases page](https://github.com/265866/arcwise/releases/latest).
+
+The check is one request to GitHub's API for the latest release. It names Arcwise and its version
+as the user agent and sends nothing else, though GitHub sees your IP address, as it does for any
+visit. Only when a newer version exists does Arcwise download its installer and attestation from
+the release. To turn updates off, open the settings menu and switch off **Automatic updates**.
+The bottom of the same menu shows which version you have.
+
 ## Requirements
 
 - Windows 10 or 11 with a Direct3D 11 GPU.
 - For AV1 clips, the [AV1 Video Extension](https://apps.microsoft.com/detail/9mvzqvxjbq9v) from
   the Microsoft Store. Windows 11 usually has it already.
 
-## Building
+## Contributing
 
-Arcwise is written in Rust with [GPUI](https://www.gpui.rs/), the UI framework behind the Zed
-editor. The toolchain version is pinned in `rust-toolchain.toml`.
-
-```sh
-cargo run --release
-```
-
-The first build compiles GPUI and takes a few minutes. Command-line flags open a library or a
-lineup directly, which helps while working on the UI:
-
-```sh
-cargo run --release -- --library D:\lineups --map Ascent --agent Sova --side attack
-cargo run --release -- --lineup 211 --view aim
-```
-
-The workspace has three crates:
-
-| Crate | Holds |
-| --- | --- |
-| `arcwise-core` | The library format, landing clusters and browsing state. No UI; most tests live here. |
-| `arcwise-video` | The Media Foundation decode thread. |
-| `arcwise` | The GPUI app. |
-
-`cargo test` runs everything, including decoding a small H.264 clip through Media Foundation.
-Two tests need files of your own and are ignored by default:
-
-```sh
-ARCWISE_LIBRARY=D:\lineups cargo test -p arcwise-core -- --ignored
-ARCWISE_CLIP=D:\lineups\lineups\211.mp4 cargo test -p arcwise-video -- --ignored
-```
-
-To see where time goes, name a file in `ARCWISE_TRACE`. The app writes a CSV line for every
-frame (how long it took to draw), every key and click (how long until the first frame after
-it, and until nothing on screen is still loading), and every picture or clip it loads:
-
-```sh
-ARCWISE_TRACE=trace.csv cargo run --release
-```
+[CONTRIBUTING.md](CONTRIBUTING.md) covers building Arcwise, its tests, how changes land and how
+releases ship.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE). Release builds include `THIRD-PARTY-LICENSES.html` for the open-source crates
+Arcwise is built with.
 
 Arcwise isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
 anyone officially involved in producing or managing Riot Games properties. Riot Games, and all
