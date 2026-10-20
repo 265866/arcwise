@@ -2,7 +2,8 @@
 
 use arcwise_core::{Landing, LandingKey, Lineup, Point};
 use gpui::{
-    AnyElement, Context, Div, FontWeight, Hsla, IntoElement, Pixels, canvas, div, prelude::*, px,
+    AnyElement, Context, Div, FontWeight, Hsla, IntoElement, Pixels, Stateful, canvas, div,
+    prelude::*, px,
 };
 
 use super::Browser;
@@ -14,8 +15,18 @@ use crate::{theme, ui};
 const MARKER: f32 = 30.;
 
 impl Browser {
-    pub(super) fn map_column(&self, cx: &mut Context<Self>) -> Div {
+    /// A click on the board that reaches no control closes the lineup, back to the map.
+    pub(super) fn map_column(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
+            .id("board")
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.browse.selected_lineup().is_some() {
+                    this.browse.clear_selection();
+                    this.peek_view = None;
+                    this.peek_lineup = None;
+                    cx.notify();
+                }
+            }))
             .flex_1()
             .min_w_0()
             .h_full()
@@ -65,6 +76,7 @@ impl Browser {
             current.is_none(),
         )
         .on_click(cx.listener(|this, _, _, cx| {
+            cx.stop_propagation();
             this.browse.set_ability(&this.library, None);
             cx.notify();
         }));
@@ -83,6 +95,7 @@ impl Browser {
                 current == Some(id),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
                 this.browse.set_ability(&this.library, Some(id));
                 cx.notify();
             }))
@@ -300,6 +313,7 @@ impl Browser {
                 }
             }))
             .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
                 this.hovered = None;
                 this.browse.select_landing(key);
                 cx.notify();
@@ -418,6 +432,7 @@ impl Browser {
             .cursor_pointer()
             .child(number.to_string())
             .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
                 this.browse.select_lineup(id);
                 cx.notify();
             }))
