@@ -145,6 +145,7 @@ impl Browser {
     pub(super) fn close(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
         if self.lightbox.take().is_none() {
             if self.menu_open {
+                self.end_strength_drag(cx);
                 self.menu_open = false;
             } else if self.browse.chooser().is_some() {
                 self.browse.dismiss_chooser(&self.library);

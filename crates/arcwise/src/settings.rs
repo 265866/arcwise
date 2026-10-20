@@ -6,6 +6,8 @@ use anyhow::Context as _;
 use arcwise_core::{AgentId, MapId, Side};
 use serde::{Deserialize, Serialize};
 
+use crate::theme;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -15,6 +17,8 @@ pub struct Settings {
     pub last: Option<Last>,
     /// Whether the window shows what is behind it, blurred.
     pub blur: bool,
+    /// How much of the blur shows, from 0 to 1; see [`theme::strength`].
+    pub blur_strength: f32,
 }
 
 impl Default for Settings {
@@ -23,6 +27,7 @@ impl Default for Settings {
             library: None,
             last: None,
             blur: true,
+            blur_strength: theme::DEFAULT_STRENGTH,
         }
     }
 }
@@ -84,6 +89,7 @@ mod tests {
                 side: Side::Defense,
             }),
             blur: false,
+            blur_strength: 0.3,
         };
         settings.write(&path).unwrap();
         assert_eq!(Settings::read(&path).unwrap(), settings);
@@ -95,5 +101,6 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.blur, "blur is on until turned off");
+        assert_eq!(settings.blur_strength, theme::DEFAULT_STRENGTH);
     }
 }

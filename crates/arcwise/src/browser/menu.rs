@@ -1,15 +1,19 @@
 //! The settings menu, opened from the gear at the right of the header.
 
 use gpui::{
-    Anchor, Context, Div, FontWeight, IntoElement, MouseButton, Stateful, anchored, deferred, div,
-    point, prelude::*, px, svg,
+    Anchor, Bounds, Context, DispatchPhase, Div, FontWeight, IntoElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Stateful, WeakEntity, Window, anchored,
+    canvas, deferred, div, point, prelude::*, px, svg,
 };
 
-use super::{Browser, ChangeLibrary, SetBlur};
+use super::{Browser, ChangeLibrary, SetBlur, SetBlurStrength};
 use crate::{theme, ui};
 
 /// A cog: teeth from a dashed ring, around a ring for the body.
 const GEAR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#000" stroke-width="3.5" stroke-dasharray="3.534 3.534"/><circle cx="12" cy="12" r="6" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
+
+/// The strength slider's knob, which hangs half its width past each end of the track.
+const KNOB: Pixels = px(14.);
 
 impl Browser {
     /// The gear that opens and closes the menu, with the menu under it while open.
@@ -147,6 +151,77 @@ impl Browser {
                         cx.emit(SetBlur(on));
                     })),
             )
+            .when(blur, |menu| menu.child(self.strength_row(cx)))
+    }
+
+    /// How much of the blur shows: a track to click or drag along, which changes the window as
+    /// it moves and is saved when let go.
+    fn strength_row(&self, cx: &mut Context<Self>) -> Div {
+        let strength = theme::strength();
+        let browser = cx.entity().downgrade();
+        let bar = |d: Div| d.absolute().left_0().top(px(9.)).h(px(4.)).rounded_full();
+        row()
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::muted())
+                    .child("Strength"),
+            )
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .h(px(22.))
+                    .cursor_pointer()
+                    .child(bar(div()).right_0().bg(theme::raised()))
+                    .child(bar(div()).w(gpui::relative(strength)).bg(theme::accent()))
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(4.))
+                            .left(gpui::relative(strength))
+                            .ml(-KNOB / 2.)
+                            .size(KNOB)
+                            .rounded_full()
+                            .bg(theme::text()),
+                    )
+                    .child(
+                        canvas(
+                            |bounds, _, _| bounds,
+                            move |_, bounds, window, _| {
+                                track_strength(bounds, browser, window);
+                            },
+                        )
+                        .absolute()
+                        .inset_0(),
+                    ),
+            )
+            .child(
+                ui::num(format!("{:.0}%", strength * 100.))
+                    .w(px(34.))
+                    .flex()
+                    .justify_end(),
+            )
+    }
+
+    fn set_strength(&mut self, strength: f32, window: &mut Window) {
+        if strength.is_nan() {
+            return;
+        }
+        // Whole percents, as the slider shows.
+        let strength = (strength.clamp(0., 1.) * 100.).round() / 100.;
+        if strength != theme::strength() {
+            theme::set_strength(strength);
+            window.refresh();
+        }
+    }
+
+    /// Ends a drag along the strength track, and saves where it stopped.
+    pub(super) fn end_strength_drag(&mut self, cx: &mut Context<Self>) {
+        if self.strength_drag {
+            self.strength_drag = false;
+            cx.emit(SetBlurStrength(theme::strength()));
+        }
     }
 
     /// While the menu is open, the layer under it that closes it when clicked. It covers the
@@ -169,6 +244,57 @@ impl Browser {
                 )
         })
     }
+}
+
+/// Follows the pointer along the strength track at `bounds`: a press on the track starts a drag,
+/// which follows the pointer anywhere in the window until the button is let go.
+fn track_strength(bounds: Bounds<Pixels>, browser: WeakEntity<Browser>, window: &mut Window) {
+    let along = move |x: Pixels| (x - bounds.left()) / bounds.size.width;
+    window.on_mouse_event({
+        let browser = browser.clone();
+        move |event: &MouseDownEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble
+                && event.button == MouseButton::Left
+                && bounds.dilate(KNOB / 2.).contains(&event.position)
+            {
+                browser
+                    .update(cx, |this, _| {
+                        this.strength_drag = true;
+                        this.set_strength(along(event.position.x), window);
+                    })
+                    .ok();
+            }
+        }
+    });
+    window.on_mouse_event({
+        let browser = browser.clone();
+        move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            browser
+                .update(cx, |this, cx| {
+                    if !this.strength_drag {
+                        return;
+                    }
+                    // A release can go missing when another window takes the pointer, as with
+                    // Alt+Tab mid-drag.
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        this.set_strength(along(event.position.x), window);
+                    } else {
+                        this.end_strength_drag(cx);
+                    }
+                })
+                .ok();
+        }
+    });
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+            browser
+                .update(cx, |this, cx| this.end_strength_drag(cx))
+                .ok();
+        }
+    });
 }
 
 /// A line in the menu: what it sets, then its control.

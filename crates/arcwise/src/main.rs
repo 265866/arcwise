@@ -30,6 +30,7 @@ fn main() {
     let args = Args::parse(std::env::args_os().skip(1));
     let settings = Settings::load();
     theme::set_blur(settings.blur);
+    theme::set_strength(settings.blur_strength);
     let preload = app::preload(&args, &settings);
     gpui_platform::application().run(move |cx: &mut App| {
         if trace::enabled() {

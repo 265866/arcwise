@@ -41,7 +41,7 @@ Arcwise is a separate window, not an overlay: keep it on a second monitor while 
 Arcwise does not come with lineups or download any. It reads a library folder on your computer;
 [docs/library-format.md](docs/library-format.md) describes the layout. On first run it asks for
 the folder, and the settings menu, behind the gear at the top right, opens another one. The
-same menu turns background blur on or off.
+same menu turns background blur on or off and sets how much of it shows.
 
 ## Requirements
 

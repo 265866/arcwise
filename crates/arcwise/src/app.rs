@@ -13,7 +13,7 @@ use gpui::{
 };
 
 use crate::args::Args;
-use crate::browser::{self, Browser, ChangeLibrary, Chosen, SetBlur};
+use crate::browser::{self, Browser, ChangeLibrary, Chosen, SetBlur, SetBlurStrength};
 use crate::images::{self, Picture};
 use crate::settings::{Last, Settings};
 use crate::{theme, trace, ui};
@@ -154,6 +154,14 @@ impl Arcwise {
                     this.settings.blur = on;
                     this.save_settings();
                 })
+                .detach();
+                cx.subscribe(
+                    &browser,
+                    |this, _, &SetBlurStrength(s): &SetBlurStrength, _| {
+                        this.settings.blur_strength = s;
+                        this.save_settings();
+                    },
+                )
                 .detach();
                 if let Screen::Browsing(old) = &self.screen {
                     old.update(cx, |old, cx| old.release_all(cx));

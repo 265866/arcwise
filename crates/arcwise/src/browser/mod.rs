@@ -60,6 +60,8 @@ pub struct Browser {
     lightbox: Option<PathBuf>,
     /// Whether the settings menu is open.
     menu_open: bool,
+    /// Whether the pointer is dragging along the blur strength track.
+    strength_drag: bool,
     slide: Slide,
     /// The lineup in the panel: the selected one, or the last one while the panel slides away.
     shown: Option<LineupId>,
@@ -106,6 +108,12 @@ pub struct SetBlur(pub bool);
 
 impl EventEmitter<SetBlur> for Browser {}
 
+/// Emitted when the user lets go of the blur strength track, with where it stopped.
+#[derive(Clone, Copy, Debug)]
+pub struct SetBlurStrength(pub f32);
+
+impl EventEmitter<SetBlurStrength> for Browser {}
+
 impl Browser {
     /// A browser over `library`, opening at `start`, with `pictures` already decoded for it.
     pub fn new(
@@ -133,6 +141,7 @@ impl Browser {
             player: cx.new(|_| Player::new()),
             lightbox: None,
             menu_open: false,
+            strength_drag: false,
             slide: Slide::closed(),
             shown: None,
             prefetched: None,

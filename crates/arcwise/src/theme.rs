@@ -1,12 +1,17 @@
 //! Colors and type, shared by every part of the window.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use arcwise_core::Rgb;
 use gpui::{Hsla, Rgba, WindowBackgroundAppearance, rgb};
 
 /// Whether the window shows what is behind it, blurred, through its background.
 static BLUR: AtomicBool = AtomicBool::new(false);
+/// How much of the blur shows, from 0 to 1, as the bits of an `f32`.
+static STRENGTH: AtomicU32 = AtomicU32::new(DEFAULT_STRENGTH.to_bits());
+
+/// The strength that gives the window's look before strength could be chosen.
+pub const DEFAULT_STRENGTH: f32 = 0.55;
 
 pub fn set_blur(on: bool) {
     BLUR.store(on, Ordering::Relaxed);
@@ -14,6 +19,22 @@ pub fn set_blur(on: bool) {
 
 pub fn blur() -> bool {
     BLUR.load(Ordering::Relaxed)
+}
+
+pub fn set_strength(strength: f32) {
+    STRENGTH.store(strength.clamp(0., 1.).to_bits(), Ordering::Relaxed);
+}
+
+pub fn strength() -> f32 {
+    f32::from_bits(STRENGTH.load(Ordering::Relaxed))
+}
+
+/// How opaque [`backdrop`] and [`surface`] are at `strength`. At 0 the window is solid, at
+/// [`DEFAULT_STRENGTH`] they are 0.78 and 0.5, and at 1 the backdrop is still dark enough that
+/// text stays readable over a white page behind the window.
+fn opacity(strength: f32) -> (f32, f32) {
+    let s = strength.clamp(0., 1.) / DEFAULT_STRENGTH;
+    (1. - 0.22 * s, 1. - 0.5 * s)
 }
 
 /// What the window asks Windows to draw behind it.
@@ -25,15 +46,14 @@ pub fn window_background() -> WindowBackgroundAppearance {
     }
 }
 
-/// The window's own background, see-through while [`blur`] is on. Dark enough that text stays
-/// readable over a white page behind the window.
+/// The window's own background, see-through by [`strength`] while [`blur`] is on.
 pub fn backdrop() -> Hsla {
-    alpha(bg(), if blur() { 0.78 } else { 1. })
+    alpha(bg(), if blur() { opacity(strength()).0 } else { 1. })
 }
 
 /// The header and the lineup panel, laid over [`backdrop`].
 pub fn surface() -> Hsla {
-    alpha(panel(), if blur() { 0.5 } else { 1. })
+    alpha(panel(), if blur() { opacity(strength()).1 } else { 1. })
 }
 
 pub fn bg() -> Rgba {
@@ -112,3 +132,19 @@ pub fn mix(a: impl Into<Rgba>, b: impl Into<Rgba>, amount: f32) -> Rgba {
 pub const FONT: &str = "Segoe UI Variable Text";
 pub const DISPLAY_FONT: &str = "Segoe UI Variable Display";
 pub const MONO_FONT: &str = "Cascadia Mono";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strength_runs_from_solid_to_readable() {
+        assert_eq!(opacity(0.), (1., 1.), "solid, as with blur off");
+        let (backdrop, surface) = opacity(DEFAULT_STRENGTH);
+        assert!((backdrop - 0.78).abs() < 0.001 && (surface - 0.5).abs() < 0.001);
+        let (backdrop, surface) = opacity(1.);
+        assert!((backdrop - 0.6).abs() < 0.001 && (surface - 0.091).abs() < 0.001);
+        assert_eq!(opacity(-1.), opacity(0.));
+        assert_eq!(opacity(2.), opacity(1.));
+    }
+}
