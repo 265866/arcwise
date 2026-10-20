@@ -114,6 +114,13 @@ pub struct SetBlurStrength(pub f32);
 
 impl EventEmitter<SetBlurStrength> for Browser {}
 
+/// Emitted when the user turns automatic updates on or off, which [`crate::update::enabled`]
+/// already shows.
+#[derive(Clone, Copy, Debug)]
+pub struct SetAutoUpdate(pub bool);
+
+impl EventEmitter<SetAutoUpdate> for Browser {}
+
 impl Browser {
     /// A browser over `library`, opening at `start`, with `pictures` already decoded for it.
     pub fn new(

@@ -46,6 +46,8 @@ SolidCompression=yes
 ; starts to update itself, close it without asking.
 CloseApplications=yes
 RestartApplications=no
+; Two copies of Arcwise can each finish downloading an update and start its installer.
+SetupMutex=Arcwise.Setup
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -54,6 +56,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#BuildDir}\arcwise.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\THIRD-PARTY-LICENSES.html"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+
+[UninstallDelete]
+; Installers the app downloaded to update itself (see crates/arcwise/src/update.rs).
+Type: filesandordirs; Name: "{localappdata}\Arcwise\updates"
+Type: dirifempty; Name: "{localappdata}\Arcwise"
 
 [Icons]
 Name: "{autoprograms}\Arcwise"; Filename: "{app}\arcwise.exe"

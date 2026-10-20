@@ -11,11 +11,15 @@ use gpui::{
     MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString, WeakEntity, Window, canvas, div,
     prelude::*, px,
 };
+use semver::Version;
 
 use crate::args::Args;
-use crate::browser::{self, Browser, ChangeLibrary, Chosen, SetBlur, SetBlurStrength};
+use crate::browser::{
+    self, Browser, ChangeLibrary, Chosen, SetAutoUpdate, SetBlur, SetBlurStrength,
+};
 use crate::images::{self, Picture};
 use crate::settings::{Last, Settings};
+use crate::update::{self, Outcome, Update};
 use crate::{theme, trace, ui};
 
 enum Screen {
@@ -36,6 +40,18 @@ pub struct Arcwise {
     notice: Option<SharedString>,
     /// Library loads started, to tell the latest from older ones still running.
     loads: u64,
+    /// A newer version found when Arcwise opened.
+    update: Option<UpdateState>,
+}
+
+enum UpdateState {
+    /// Downloaded and verified, with a card offering to restart into it. It installs when
+    /// Arcwise closes.
+    Ready(Update),
+    /// Ready, with the card put away by Later.
+    Later(Update),
+    /// A newer version that will not install, and why, shown until dismissed.
+    Failed(Version, &'static str),
 }
 
 impl Arcwise {
@@ -51,7 +67,14 @@ impl Arcwise {
             start: None,
             notice: None,
             loads: 0,
+            update: None,
         };
+        // Closing the window releases this view before GPUI quits, too late for an app-quit
+        // handler on it, so the update installs on release.
+        cx.on_release(|this, _| this.install_on_close()).detach();
+        if this.settings.auto_update && update::installed() {
+            this.check_for_update(cx);
+        }
         match args {
             Err(problem) => {
                 this.screen = Screen::Welcome {
@@ -163,6 +186,23 @@ impl Arcwise {
                     },
                 )
                 .detach();
+                cx.subscribe(
+                    &browser,
+                    |this, _, &SetAutoUpdate(on): &SetAutoUpdate, cx| {
+                        this.settings.auto_update = on;
+                        this.save_settings();
+                        // Turning updates off drops one already waiting to install.
+                        if !on
+                            && let Some(UpdateState::Ready(update) | UpdateState::Later(update)) =
+                                this.update
+                                    .take_if(|u| !matches!(u, UpdateState::Failed(..)))
+                        {
+                            update::discard(update);
+                            cx.notify();
+                        }
+                    },
+                )
+                .detach();
                 if let Screen::Browsing(old) = &self.screen {
                     old.update(cx, |old, cx| old.release_all(cx));
                 }
@@ -217,6 +257,147 @@ impl Arcwise {
                         cx.notify();
                     })),
             )
+    }
+
+    /// Looks for a newer version off the UI thread, and readies it to install.
+    fn check_for_update(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = update::directory() else {
+            return;
+        };
+        let task =
+            cx.background_spawn(async move { update::check(&update::current_version(), &dir) });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| this.update_checked(outcome, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn update_checked(&mut self, outcome: anyhow::Result<Outcome>, cx: &mut Context<Self>) {
+        // Updates were switched off while the check ran.
+        if !self.settings.auto_update {
+            if let Ok(Outcome::Ready(update)) = outcome {
+                update::discard(update);
+            }
+            return;
+        }
+        match outcome {
+            Ok(Outcome::UpToDate) => return,
+            Ok(Outcome::Ready(update)) => self.update = Some(UpdateState::Ready(update)),
+            Ok(Outcome::Unverified { version, reason }) => {
+                eprintln!("arcwise: did not install {version}: {reason}");
+                self.update = Some(UpdateState::Failed(
+                    version,
+                    "Its download could not be verified.",
+                ));
+            }
+            // Offline, or GitHub did not answer; the next launch tries again.
+            Err(e) => {
+                eprintln!("arcwise: could not check for updates: {e:#}");
+                return;
+            }
+        }
+        cx.notify();
+    }
+
+    fn restart_to_update(&mut self, cx: &mut Context<Self>) {
+        let Some(UpdateState::Ready(update)) = self.update.take() else {
+            return;
+        };
+        match update::install(&update, true) {
+            Ok(()) => cx.quit(),
+            Err(e) => {
+                eprintln!("arcwise: could not start the installer: {e}");
+                self.update = Some(UpdateState::Failed(
+                    update.version,
+                    "Its installer would not start.",
+                ));
+                cx.notify();
+            }
+        }
+    }
+
+    fn install_on_close(&mut self) {
+        if let Some(UpdateState::Ready(update) | UpdateState::Later(update)) = self.update.take()
+            && let Err(e) = update::install(&update, false)
+        {
+            eprintln!("arcwise: could not start the installer: {e}");
+        }
+    }
+
+    /// A card at the bottom right about a new version: ready to install, or why it was not.
+    fn update_card(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let dismiss = |this: &mut Self, cx: &mut Context<Self>| {
+            this.update = None;
+            cx.notify();
+        };
+        let (title, detail, buttons) = match self.update.as_ref()? {
+            UpdateState::Ready(update) => (
+                format!("Arcwise {} is ready", update.version),
+                "It installs when you close Arcwise.".to_owned(),
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        ui::button("restart-to-update", "Restart now")
+                            .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx))),
+                    )
+                    .child(ui::button("update-later", "Later").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            if let Some(UpdateState::Ready(update)) = this.update.take() {
+                                this.update = Some(UpdateState::Later(update));
+                            }
+                            cx.notify();
+                        },
+                    ))),
+            ),
+            UpdateState::Failed(version, why) => (
+                format!("Arcwise {version} was not installed"),
+                format!("{why} Get it from the releases page instead."),
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        ui::button("open-releases", "Open releases").on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                cx.open_url(update::RELEASES_PAGE);
+                                dismiss(this, cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        ui::button("dismiss-update", "Dismiss")
+                            .on_click(cx.listener(move |this, _, _, cx| dismiss(this, cx))),
+                    ),
+            ),
+            UpdateState::Later(_) => return None,
+        };
+        let card = div()
+            .id("update")
+            .absolute()
+            .right(px(20.))
+            .bottom(px(20.))
+            .occlude()
+            .w(px(340.))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .p(px(14.))
+            .rounded(px(12.))
+            .border_1()
+            .border_color(theme::line())
+            .bg(theme::panel())
+            .shadow_lg()
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(theme::muted())
+                    .child(detail),
+            )
+            .child(buttons);
+        Some(card)
     }
 
     /// Ends each frame for [`trace`] with a canvas painted last, which also starts an input at
@@ -362,9 +543,11 @@ impl Render for Arcwise {
                     .into_any_element(),
                 Screen::Browsing(_) => unreachable!("rendered above"),
             };
-            root.child(ui::bar())
+            root.relative()
+                .child(ui::bar())
                 .child(div().flex_1().min_h_0().child(body))
         };
+        let root = root.children(self.update_card(cx));
         if trace::enabled() {
             self.traced(root, start)
         } else {

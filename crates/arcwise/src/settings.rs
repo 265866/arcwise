@@ -19,6 +19,8 @@ pub struct Settings {
     pub blur: bool,
     /// How much of the blur shows, from 0 to 1; see [`theme::strength`].
     pub blur_strength: f32,
+    /// Whether Arcwise updates itself; see [`crate::update`].
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -28,6 +30,7 @@ impl Default for Settings {
             last: None,
             blur: true,
             blur_strength: theme::DEFAULT_STRENGTH,
+            auto_update: true,
         }
     }
 }
@@ -90,6 +93,7 @@ mod tests {
             }),
             blur: false,
             blur_strength: 0.3,
+            auto_update: false,
         };
         settings.write(&path).unwrap();
         assert_eq!(Settings::read(&path).unwrap(), settings);
@@ -102,5 +106,14 @@ mod tests {
         assert_eq!(settings, Settings::default());
         assert!(settings.blur, "blur is on until turned off");
         assert_eq!(settings.blur_strength, theme::DEFAULT_STRENGTH);
+        assert!(settings.auto_update, "updates are on until turned off");
+    }
+
+    #[test]
+    fn settings_saved_before_updates_existed_turn_them_on() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"blur": false, "blur_strength": 0.3}"#).unwrap();
+        assert!(!settings.blur);
+        assert!(settings.auto_update);
     }
 }
