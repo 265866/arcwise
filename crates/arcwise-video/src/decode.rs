@@ -1,7 +1,7 @@
 //! The decode thread.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Select, Sender};
 use windows::Win32::Foundation::{E_FAIL, HANDLE, HMODULE, WAIT_OBJECT_0};
@@ -21,6 +21,9 @@ const VIDEO: u32 = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
 
 /// How long to wait for the GPU to finish copying a frame before giving up on it.
 const COPY_TIMEOUT_MS: u32 = 1000;
+
+/// How long a request to prepare waits for the frame in hand to be taken; see [`Clip::send`].
+const PREPARE_WAIT: Duration = Duration::from_millis(50);
 
 pub fn run(commands: Receiver<Command>, frames: Sender<Frame>, events: Sender<Event>) {
     // SAFETY: called once at the start of this thread; each successful call is balanced below.
@@ -68,7 +71,7 @@ fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<
                 ready = match prepare(device.as_mut(), path, max_height) {
                     Ok(prepared) => Some(prepared),
                     Err(e) => {
-                        recover(&mut device, &e);
+                        recover(&mut device, &mut ready, &e);
                         None
                     }
                 };
@@ -99,7 +102,7 @@ fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<
                             error: format!("{}: {}", path.display(), e.message()),
                             codec_missing: e.code() == MF_E_TOPO_CODEC_NOT_FOUND,
                         });
-                        recover(&mut device, &e);
+                        recover(&mut device, &mut ready, &e);
                         commands.recv().ok()
                     }
                 }
@@ -125,10 +128,11 @@ fn device_lost(e: &windows::core::Error) -> bool {
 }
 
 /// A driver update or GPU reset takes the device away; makes a new one for the next clip
-/// rather than failing every clip until a restart.
-fn recover(device: &mut Option<Device>, e: &windows::core::Error) {
+/// rather than failing every clip until a restart, and drops the clip prepared on the old one.
+fn recover(device: &mut Option<Device>, ready: &mut Option<Prepared>, e: &windows::core::Error) {
     if device_lost(e) {
         *device = Device::new().ok();
+        *ready = None;
     }
 }
 
@@ -458,38 +462,53 @@ impl Clip<'_> {
     }
 
     /// Waits for the player to take `frame`, answering commands meanwhile. Returns why the clip
-    /// ended, if it did. A request to prepare waits until the frame is sent: preparing takes
-    /// longer than a frame, and the first frame of a clip just opened must not wait for it.
+    /// ended, if it did. A request to prepare waits a little for the frame to go first: a clip
+    /// just opened sends its first frame within a display frame or two, and must not wait
+    /// behind a prepare. A paused or hidden clip sends none, so the prepare goes ahead then.
     fn send(&mut self, frame: Frame) -> windows::core::Result<Option<Ended>> {
         let mut frame = Some(frame);
-        let mut prepare = None;
-        let ended = loop {
+        let mut prepare: Option<(Command, Instant)> = None;
+        loop {
             let mut select = Select::new();
             let send = select.send(self.frames);
             select.recv(self.commands);
-            let operation = select.select();
+            let deadline = prepare.as_ref().map(|(_, since)| *since + PREPARE_WAIT);
+            let operation = match deadline {
+                None => select.select(),
+                Some(deadline) => match select.select_deadline(deadline) {
+                    Ok(operation) => operation,
+                    Err(_) => {
+                        let (command, _) = prepare.take().expect("a prepare is waiting");
+                        if let Some(command) = self.answer(command)? {
+                            return Ok(Some(Ended::Command(command)));
+                        }
+                        continue;
+                    }
+                },
+            };
             if operation.index() == send {
                 let frame = frame.take().expect("a frame is sent once");
-                break operation
-                    .send(self.frames, frame)
-                    .err()
-                    .map(|_| Ended::Dropped);
+                if operation.send(self.frames, frame).is_err() {
+                    return Ok(Some(Ended::Dropped));
+                }
+                if let Some((command, _)) = prepare
+                    && let Some(command) = self.answer(command)?
+                {
+                    return Ok(Some(Ended::Command(command)));
+                }
+                return Ok(None);
             }
             match operation.recv(self.commands) {
                 Ok(command) => match latest(self.commands, command) {
-                    command @ Command::Prepare { .. } => prepare = Some(command),
-                    command => break Some(Ended::Command(command)),
+                    command @ Command::Prepare { .. } => {
+                        let since = prepare.map_or_else(Instant::now, |(_, since)| since);
+                        prepare = Some((command, since));
+                    }
+                    command => return Ok(Some(Ended::Command(command))),
                 },
-                Err(_) => break Some(Ended::Dropped),
+                Err(_) => return Ok(Some(Ended::Dropped)),
             }
-        };
-        if ended.is_none()
-            && let Some(command) = prepare
-            && let Some(command) = self.answer(command)?
-        {
-            return Ok(Some(Ended::Command(command)));
         }
-        Ok(ended)
     }
 
     /// Prepares a clip when asked to, between frames of this one, and hands back any other
