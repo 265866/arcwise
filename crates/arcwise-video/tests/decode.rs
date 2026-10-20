@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 
 use arcwise_video::{Decoder, Event, Frame};
 
-const DEADLINE: Duration = Duration::from_secs(10);
+/// Generous: the first clip opened on a freshly set-up machine, such as a CI runner, can take
+/// over ten seconds while Windows prepares its decoders. Later ones take milliseconds.
+const DEADLINE: Duration = Duration::from_secs(60);
 
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testsrc.mp4")
@@ -20,14 +22,22 @@ fn next_event(decoder: &Decoder) -> Event {
 
 fn next_frame(decoder: &Decoder, generation: u64) -> Frame {
     let start = Instant::now();
+    let mut seen = 0;
     loop {
-        let frame = decoder
+        let Ok(frame) = decoder
             .frames()
             .recv_timeout(DEADLINE.saturating_sub(start.elapsed()))
-            .expect("a frame before the deadline");
+        else {
+            // Say why: the decode thread reports a failure as an event, not a frame.
+            let events: Vec<Event> = decoder.events().try_iter().collect();
+            panic!(
+                "no frame of clip {generation} in {DEADLINE:?} after {seen} others; events: {events:?}"
+            );
+        };
         if frame.generation == generation {
             return frame;
         }
+        seen += 1;
     }
 }
 
