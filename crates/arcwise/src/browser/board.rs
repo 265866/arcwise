@@ -143,16 +143,23 @@ impl Browser {
         let selected = self.browse.selected_landing().map(|g| g.key);
         if ready {
             // The selected landing last, so it draws over its neighbours.
-            let markers: Vec<AnyElement> = self
+            let landings: Vec<&Landing> = self
                 .browse
                 .landings()
                 .iter()
                 .filter(|g| Some(g.key) != selected)
                 .chain(self.browse.selected_landing())
+                .collect();
+            let markers: Vec<AnyElement> = landings
+                .iter()
                 .map(|landing| {
                     self.landing_marker(landing, side, color, selected, cx)
                         .into_any_element()
                 })
+                .collect();
+            let counts: Vec<AnyElement> = landings
+                .iter()
+                .filter_map(|landing| self.landing_count(landing, side, selected))
                 .collect();
             let stands: Vec<AnyElement> = self
                 .browse
@@ -170,6 +177,7 @@ impl Browser {
             square = square
                 .child(self.throw_paths(color))
                 .children(markers)
+                .children(counts)
                 .children(stands)
                 .children(self.landing_card(side, color));
         } else {
@@ -195,6 +203,59 @@ impl Browser {
         square.into_any_element()
     }
 
+    /// How many lineups a landing marker holds, when more than one. Drawn after every marker,
+    /// so a neighbouring marker never covers it.
+    fn landing_count(
+        &self,
+        landing: &Landing,
+        side: Pixels,
+        selected: Option<LandingKey>,
+    ) -> Option<AnyElement> {
+        let count = landing.lineups.len();
+        if count < 2 {
+            return None;
+        }
+        let on = selected == Some(landing.key);
+        let hovered = self.hovered == Some(landing.key);
+        // The ring's size, as the marker draws it.
+        let ring = px(if on {
+            MARKER * 1.25
+        } else if hovered {
+            MARKER * 1.2
+        } else {
+            MARKER
+        });
+        let (x, y) = (side * (landing.at.x / 100.), side * (landing.at.y / 100.));
+        // Over the ring's top right, its right edge 9 pixels past the ring's.
+        let room = px(40.);
+        Some(
+            div()
+                .absolute()
+                .left(x + ring / 2. + px(9.) - room)
+                .top(y - ring / 2. - px(7.))
+                .w(room)
+                .flex()
+                .justify_end()
+                .when(selected.is_some() && !on && !hovered, |d| d.opacity(0.35))
+                .child(
+                    div()
+                        .min_w(px(17.))
+                        .h(px(17.))
+                        .px(px(4.))
+                        .rounded(px(9.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(theme::text())
+                        .text_color(theme::bg())
+                        .font_weight(FontWeight::EXTRA_BOLD)
+                        .text_size(px(10.))
+                        .child(count.to_string()),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn landing_marker(
         &self,
         landing: &Landing,
@@ -214,7 +275,6 @@ impl Browser {
             .ready();
         let key = landing.key;
         let first = landing.lineups[0];
-        let count = landing.lineups.len();
         let slot = px(MARKER * 1.25);
         let group = format!("landing-{}-{}", key.ability.0, key.first.0);
         div()
@@ -265,27 +325,7 @@ impl Browser {
                         gpui::img(gpui::ImageSource::Render(icon))
                             .size(px(17.))
                             .object_fit(gpui::ObjectFit::Contain)
-                    }))
-                    .when(count > 1, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .top(px(-7.))
-                                .right(px(-9.))
-                                .min_w(px(17.))
-                                .h(px(17.))
-                                .px(px(4.))
-                                .rounded(px(9.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .bg(theme::text())
-                                .text_color(theme::bg())
-                                .font_weight(FontWeight::EXTRA_BOLD)
-                                .text_size(px(10.))
-                                .child(count.to_string()),
-                        )
-                    }),
+                    })),
             )
     }
 
