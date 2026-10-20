@@ -11,8 +11,10 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use gpui::{App, AsyncApp, Context, RenderImage, WeakEntity, prelude::*};
 
-/// Decoded pixels kept in memory, in bytes.
-const BUDGET: usize = 512 << 20;
+/// Decoded pixels kept in memory, in bytes: room for both sides of a map and the pictures of
+/// the landings on and around the selected one, about 90 MB at most. The GPU holds a second
+/// copy of those drawn.
+const BUDGET: usize = 128 << 20;
 /// Map SVGs are drawn this many pixels across.
 const SVG_SIZE: u32 = 2048;
 
