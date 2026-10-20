@@ -2,11 +2,11 @@
 
 use arcwise_core::{Landing, LandingKey, Lineup, Point};
 use gpui::{
-    AnyElement, Context, Div, FontWeight, Hsla, IntoElement, PathBuilder, Pixels, canvas, div,
-    prelude::*, px,
+    AnyElement, Context, Div, FontWeight, Hsla, IntoElement, Pixels, canvas, div, prelude::*, px,
 };
 
 use super::Browser;
+use crate::drawn::Line;
 use crate::images::{Image, Look};
 use crate::{theme, ui};
 
@@ -305,44 +305,38 @@ impl Browser {
                 Some((Some(id) == focus, points))
             })
             .collect();
+        let drawn = self.throws.clone();
         canvas(
             |_, _, _| {},
             move |bounds, (), window, _| {
-                let to_px = |p: Point| {
+                let to_px = |p: &Point| {
                     gpui::point(
-                        bounds.origin.x + bounds.size.width * (p.x / 100.),
-                        bounds.origin.y + bounds.size.height * (p.y / 100.),
+                        bounds.size.width * (p.x / 100.),
+                        bounds.size.height * (p.y / 100.),
                     )
                 };
                 // The focused throw last, so it draws over the others.
+                let mut lines = Vec::new();
                 for (focused, points) in throws
                     .iter()
                     .filter(|t| !t.0)
                     .chain(throws.iter().filter(|t| t.0))
                 {
-                    let line = |width: f32, dashed: bool| {
-                        let mut path = PathBuilder::stroke(px(width));
-                        if dashed {
-                            path = path.dash_array(&[px(4.), px(5.)]);
-                        }
-                        let mut points = points.iter().map(|&p| to_px(p));
-                        path.move_to(points.next()?);
-                        for p in points {
-                            path.line_to(p);
-                        }
-                        path.build().ok()
+                    let points: Vec<_> = points.iter().map(to_px).collect();
+                    let line = |width: f32, color: Hsla, dash| Line {
+                        points: points.clone(),
+                        width: px(width),
+                        color,
+                        dash,
                     };
                     if *focused {
-                        if let Some(glow) = line(8., false) {
-                            window.paint_path(glow, theme::alpha(color, 0.22));
-                        }
-                        if let Some(path) = line(2.5, false) {
-                            window.paint_path(path, color);
-                        }
-                    } else if let Some(path) = line(1.5, true) {
-                        window.paint_path(path, theme::alpha(color, 0.45));
+                        lines.push(line(8., theme::alpha(color, 0.22), None));
+                        lines.push(line(2.5, color, None));
+                    } else {
+                        lines.push(line(1.5, theme::alpha(color, 0.45), Some((px(4.), px(5.)))));
                     }
                 }
+                drawn.paint(bounds, lines, window);
             },
         )
         .absolute()

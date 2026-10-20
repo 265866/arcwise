@@ -6,6 +6,7 @@
 mod app;
 mod args;
 mod browser;
+mod drawn;
 mod images;
 mod pacing;
 mod player;

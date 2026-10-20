@@ -22,6 +22,7 @@ use gpui::{
     StyleRefinement, Window, div, prelude::*,
 };
 
+use crate::drawn::Drawn;
 use crate::images::{Image, Images, Look, Picture};
 use crate::player::Player;
 use crate::ui;
@@ -69,6 +70,10 @@ pub struct Browser {
     waiting: bool,
     /// The most rows the viewer shows, from the last render; see [`viewer_rows`].
     rows: u32,
+    /// The selected landing's throws on the map, and the throw in the stand views.
+    throws: Rc<Drawn>,
+    stand_tile: Rc<Drawn>,
+    stand_view: Rc<Drawn>,
 }
 
 impl EventEmitter<Chosen> for Browser {}
@@ -114,6 +119,9 @@ impl Browser {
             parts: None,
             waiting: false,
             rows: viewer_rows_for(crate::WINDOW_WIDTH, 1.),
+            throws: Rc::default(),
+            stand_tile: Rc::default(),
+            stand_view: Rc::default(),
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -169,6 +177,9 @@ impl Browser {
     pub fn release_all(&mut self, cx: &mut Context<Self>) {
         self.images.update(cx, |images, cx| images.clear(cx));
         self.player.update(cx, |player, cx| player.release_all(cx));
+        for drawn in [&self.throws, &self.stand_tile, &self.stand_view] {
+            drawn.release(cx);
+        }
     }
 
     /// Fetches the other side's map, so the side switch shows it at once.

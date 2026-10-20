@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use arcwise_core::Agent;
 use gpui::{
-    Bounds, Div, ElementId, FontWeight, Hsla, ImageSource, ObjectFit, PathBuilder, Pixels,
-    RenderImage, SharedString, Stateful, canvas, div, img, point, prelude::*, px,
+    Bounds, Div, ElementId, FontWeight, Hsla, ImageSource, ObjectFit, Pixels, RenderImage,
+    SharedString, Stateful, Transformation, canvas, div, img, prelude::*, px, svg,
 };
 
 use crate::theme;
@@ -45,29 +45,21 @@ fn brand() -> impl IntoElement {
 
 /// The brand mark: a square stood on its corner.
 pub fn diamond(size: Pixels, color: impl Into<Hsla>) -> impl IntoElement {
-    let color = color.into();
-    canvas(
-        |_, _, _| {},
-        move |bounds, (), window, _| {
-            let c = bounds.center();
-            let r = bounds.size.width / 2.;
-            let mut path = PathBuilder::fill();
-            path.add_polygon(
-                &[
-                    point(c.x, c.y - r),
-                    point(c.x + r, c.y),
-                    point(c.x, c.y + r),
-                    point(c.x - r, c.y),
-                ],
-                true,
-            );
-            if let Ok(path) = path.build() {
-                window.paint_path(path, color);
-            }
-        },
-    )
-    .size(size)
+    svg().data(DIAMOND).size(size).text_color(color.into())
 }
+
+// The fixed shapes are SVGs, which GPUI draws as masks in its sprite atlas, tinted with the text
+// color. Paths would cost a window-sized multisampled texture, about 27 MB of GPU memory, once
+// any one was drawn.
+const DIAMOND: &[u8] =
+    br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><path d="M1 0 2 1 1 2 0 1Z"/></svg>"#;
+const CHEVRON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M2 4 6 8 10 4" fill="none" stroke="#000" stroke-width="2"/></svg>"##;
+const PLAY: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 2 2"><path d="M-0.6-1 1 0-0.6 1Z"/></svg>"#;
+const ARROW_HEAD: &[u8] =
+    br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 10"><path d="M0 0 6 5 0 10Z"/></svg>"#;
+const RING: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34"><circle cx="17" cy="17" r="15.5" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
+/// A quarter of [`RING`], from three o'clock to six.
+const ARC: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34"><path d="M32.5 17A15.5 15.5 0 0 1 17 32.5" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
 
 /// A bordered button with a text label.
 pub fn button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
@@ -149,23 +141,11 @@ pub fn num(text: impl Into<SharedString>) -> Div {
 
 /// A small downward chevron.
 pub fn chevron(color: impl Into<Hsla>) -> impl IntoElement {
-    let color = color.into();
-    canvas(
-        |_, _, _| {},
-        move |bounds, (), window, _| {
-            let c = bounds.center();
-            let r = px(4.);
-            let mut path = PathBuilder::stroke(px(2.));
-            path.move_to(point(c.x - r, c.y - r / 2.));
-            path.line_to(point(c.x, c.y + r / 2.));
-            path.line_to(point(c.x + r, c.y - r / 2.));
-            if let Ok(path) = path.build() {
-                window.paint_path(path, color);
-            }
-        },
-    )
-    .size(px(12.))
-    .ml(px(2.))
+    svg()
+        .data(CHEVRON)
+        .size(px(12.))
+        .ml(px(2.))
+        .text_color(color.into())
 }
 
 /// Records its parent's bounds each frame, for sizing or placing something by it. Layout that
@@ -206,27 +186,13 @@ pub fn kbd(key: impl Into<SharedString>, lit: bool) -> Div {
 
 /// A play triangle centered in its parent.
 pub fn play_glyph(size: Pixels) -> impl IntoElement {
-    canvas(
-        |_, _, _| {},
-        move |bounds, (), window, _| {
-            let c = bounds.center();
-            let h = size / 2.;
-            let mut path = PathBuilder::fill();
-            path.add_polygon(
-                &[
-                    point(c.x - h * 0.6, c.y - h),
-                    point(c.x + h, c.y),
-                    point(c.x - h * 0.6, c.y + h),
-                ],
-                true,
-            );
-            if let Ok(path) = path.build() {
-                window.paint_path(path, theme::text());
-            }
-        },
-    )
-    .absolute()
-    .inset_0()
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(svg().data(PLAY).size(size).text_color(theme::text()))
 }
 
 /// A short arrow fading from `from` to `to`, pointing right.
@@ -250,75 +216,55 @@ pub fn arrow(from: impl Into<Hsla>, to: impl Into<Hsla>) -> Div {
                 )),
         )
         .child(
-            canvas(
-                |_, _, _| {},
-                move |bounds, (), window, _| {
-                    let r = bounds.right();
-                    let c = bounds.center().y;
-                    let mut path = PathBuilder::fill();
-                    path.add_polygon(
-                        &[
-                            point(r - px(6.), c - px(5.)),
-                            point(r, c),
-                            point(r - px(6.), c + px(5.)),
-                        ],
-                        true,
-                    );
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, to);
-                    }
-                },
-            )
-            .absolute()
-            .inset_0(),
+            svg()
+                .data(ARROW_HEAD)
+                .absolute()
+                .right_0()
+                .top_0()
+                .w(px(6.))
+                .h(px(10.))
+                .text_color(to),
         )
 }
 
 /// A turning ring, centered in its parent, for something on its way.
 pub fn spinner(size: Pixels) -> impl IntoElement {
-    canvas(
-        |_, _, _| {},
-        move |bounds, (), window, _| {
-            // Turns once every 800 ms, measured from a fixed point so redraws do not restart it.
-            static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-            let t = EPOCH
-                .get_or_init(std::time::Instant::now)
-                .elapsed()
-                .as_secs_f32();
-            let turn = (t / 0.8).fract() * std::f32::consts::TAU;
-            let c = bounds.center();
-            let r = size / 2. - px(1.5);
-            let ring = |from: f32, sweep: f32, color: Hsla, window: &mut gpui::Window| {
-                let mut path = PathBuilder::stroke(px(3.));
-                let steps = 24;
-                for i in 0..=steps {
-                    let a = from + sweep * i as f32 / steps as f32;
-                    let p = point(c.x + r * a.cos(), c.y + r * a.sin());
-                    if i == 0 {
-                        path.move_to(p);
-                    } else {
-                        path.line_to(p);
-                    }
-                }
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, color);
-                }
-            };
-            ring(
-                0.,
-                std::f32::consts::TAU,
-                theme::alpha(gpui::white(), 0.19),
-                window,
-            );
-            ring(
-                turn,
-                std::f32::consts::FRAC_PI_2,
-                theme::text().into(),
-                window,
-            );
-            window.request_animation_frame();
-        },
-    )
-    .absolute()
-    .inset_0()
+    // Turns once every 800 ms, measured from a fixed point so redraws do not restart it.
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let t = EPOCH
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f32();
+    let turn = (t / 0.8).fract() * std::f32::consts::TAU;
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .relative()
+                .size(size)
+                .child(
+                    svg()
+                        .data(RING)
+                        .absolute()
+                        .inset_0()
+                        .text_color(theme::alpha(gpui::white(), 0.19)),
+                )
+                .child(
+                    svg()
+                        .data(ARC)
+                        .absolute()
+                        .inset_0()
+                        .text_color(theme::text())
+                        .with_transformation(Transformation::rotate(gpui::radians(turn))),
+                )
+                // Draws the next turn on the next frame.
+                .child(canvas(
+                    |_, _, _| {},
+                    |_, (), window, _| window.request_animation_frame(),
+                )),
+        )
 }

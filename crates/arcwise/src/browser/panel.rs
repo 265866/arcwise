@@ -1,15 +1,17 @@
 //! The lineup panel: what the selected lineup is, where to stand, aim and throw, and how.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use arcwise_core::{Landing, Lineup, Tag, View};
 use gpui::{
-    AnyElement, Bounds, Context, Div, FontWeight, Hsla, IntoElement, PathBuilder, Pixels,
-    RenderImage, SharedString, canvas, div, point, prelude::*, px, size,
+    AnyElement, Bounds, Context, Div, FontWeight, Hsla, IntoElement, Pixels, RenderImage,
+    SharedString, canvas, div, point, prelude::*, px, size,
 };
 
 use super::Browser;
 use super::board::place;
+use crate::drawn::{Drawn, Line};
 use crate::images::{Image, Look};
 use crate::{theme, ui};
 
@@ -193,7 +195,7 @@ impl Browser {
                 ))
                 .child(div().absolute().inset_0().child(self.player.clone()))
                 .into_any_element(),
-            View::Stand => self.stand_zoom(lineup, color, px(16.), cx),
+            View::Stand => self.stand_zoom(lineup, color, px(16.), self.stand_view.clone(), cx),
             View::Aim => match self.aim(lineup.id, cx) {
                 Image::Missing => missing("This lineup has no aim picture. Follow the clip."),
                 image => picture(image.ready(), false),
@@ -260,6 +262,7 @@ impl Browser {
         lineup: &Lineup,
         color: Hsla,
         dot: Pixels,
+        drawn: Rc<Drawn>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let map = self
@@ -291,18 +294,14 @@ impl Browser {
                         .paint_image(bounds, image, Default::default(), map, 0, false)
                         .ok();
                 }
+                let line = Line {
+                    points: throw.iter().map(|&p| to_px(p) - bounds.origin).collect(),
+                    width: px(2.),
+                    color,
+                    dash: Some((px(6.), px(5.))),
+                };
+                drawn.paint(bounds, vec![line], window);
                 window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                    let mut path = PathBuilder::stroke(px(2.)).dash_array(&[px(6.), px(5.)]);
-                    let mut points = throw.iter().map(|&p| to_px(p));
-                    if let Some(first) = points.next() {
-                        path.move_to(first);
-                        for p in points {
-                            path.line_to(p);
-                        }
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, color);
-                        }
-                    }
                     let r = bounds.size.width * 0.022;
                     circle(window, to_px(land), r, color);
                     circle(
@@ -339,7 +338,7 @@ impl Browser {
                 View::Stand,
                 "W",
                 "1 · Stand",
-                self.stand_zoom(lineup, color, px(9.), cx),
+                self.stand_zoom(lineup, color, px(9.), self.stand_tile.clone(), cx),
                 place(lineup.stand.callout.as_deref()).into(),
             ),
             (
