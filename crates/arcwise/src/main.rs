@@ -17,13 +17,13 @@ mod ui;
 
 use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
 
-/// The window's size when it opens.
-const WINDOW_WIDTH: f32 = 1440.;
-const WINDOW_HEIGHT: f32 = 900.;
-
 use crate::app::Arcwise;
 use crate::args::Args;
 use crate::settings::Settings;
+
+/// The window's size when it opens.
+const WINDOW_WIDTH: f32 = 1440.;
+const WINDOW_HEIGHT: f32 = 900.;
 
 fn main() {
     trace::init();

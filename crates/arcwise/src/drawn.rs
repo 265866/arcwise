@@ -20,8 +20,9 @@ pub struct Line {
 
 struct Picture {
     lines: Vec<Line>,
-    /// The size of the bounds the lines were drawn for.
+    /// The size of the bounds the lines were drawn for, and the display's scale then.
     size: Size<Pixels>,
+    scale: f32,
     /// The part of those bounds the picture covers: just around the lines.
     area: Bounds<Pixels>,
     image: Arc<RenderImage>,
@@ -40,7 +41,7 @@ impl Drawn {
         let mut last = self.last.borrow_mut();
         if !last
             .as_ref()
-            .is_some_and(|p| p.size == bounds.size && p.lines == lines)
+            .is_some_and(|p| p.size == bounds.size && p.scale == scale && p.lines == lines)
         {
             if let Some(old) = last.take() {
                 window.drop_image(old.image).ok();
@@ -54,6 +55,7 @@ impl Drawn {
             *last = Some(Picture {
                 lines,
                 size: bounds.size,
+                scale,
                 area: area.bounds,
                 image,
             });

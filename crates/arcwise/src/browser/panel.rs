@@ -33,7 +33,6 @@ impl Browser {
             div()
                 .id("panel")
                 .size_full()
-                .h_full()
                 .overflow_x_hidden()
                 .overflow_y_scroll()
                 .border_l_1()

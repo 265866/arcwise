@@ -60,12 +60,14 @@ pub struct Browser {
     slide: Slide,
     /// The lineup in the panel: the selected one, or the last one while the panel slides away.
     shown: Option<LineupId>,
-    /// The selected landing, and the first of those shown, when pictures were last fetched ahead.
-    prefetched: Option<(Option<LandingKey>, LandingKey)>,
-    /// The map and side whose other side was last fetched ahead.
-    prefetched_map: Option<(MapId, Side)>,
-    /// The lineup whose clip was last readied ahead.
-    prepared: Option<LineupId>,
+    /// The selected landing, the first and last shown, and the viewer's rows, when pictures were
+    /// last fetched ahead.
+    prefetched: Option<(Option<LandingKey>, LandingKey, LandingKey, u32)>,
+    /// The map, side and map size whose other side was last fetched ahead.
+    prefetched_map: Option<(MapId, Side, u32)>,
+    /// The lineup whose clip was last readied ahead, with the lineup shown and the viewer's rows
+    /// then.
+    prepared: Option<(LineupId, Option<LineupId>, u32)>,
     /// The choice last emitted as [`Chosen`].
     chosen: Option<Chosen>,
     /// The header and map, as views of their own; made on the first render.
@@ -181,8 +183,11 @@ impl Browser {
         !self.waiting
             && !self.player.read(cx).waiting()
             && self.parts.as_ref().is_none_or(|parts| {
-                [&parts.header, &parts.map, &parts.panel]
-                    .iter()
+                // A closed panel keeps whatever it waited for when last drawn.
+                let panel = self.shown.is_some().then_some(&parts.panel);
+                [&parts.header, &parts.map]
+                    .into_iter()
+                    .chain(panel)
                     .all(|part| !part.read(cx).waiting())
             })
     }
@@ -200,7 +205,7 @@ impl Browser {
     /// Fetches the other side's map, so the side switch shows it at once.
     fn prefetch_map(&mut self, cx: &mut Context<Self>) {
         let Some(map) = self.browse.map() else { return };
-        let key = (map.clone(), self.browse.side());
+        let key = (map.clone(), self.browse.side(), self.across);
         if self.prefetched_map.as_ref() == Some(&key) {
             return;
         }
@@ -225,12 +230,13 @@ impl Browser {
         if !matches!(image, Image::Loading) {
             return image;
         }
-        let images = self.images.read(cx);
-        MAP_SIZES
-            .iter()
-            .rev()
-            .find_map(|&across| images.peek(&path, Look::Across(across)))
-            .map_or(image, Image::Ready)
+        self.images.update(cx, |images, _| {
+            MAP_SIZES
+                .iter()
+                .rev()
+                .find_map(|&across| images.peek(&path, Look::Across(across)))
+                .map_or(image, Image::Ready)
+        })
     }
 
     /// The part of a lineup's map the viewer's stand view shows: the map at three times the
@@ -268,10 +274,11 @@ impl Browser {
     /// Fetches the pictures the keys can reach next, so stepping to them shows them at once.
     fn prefetch(&mut self, cx: &mut Context<Self>) {
         let landings = self.browse.landings();
-        let Some(first) = landings.first() else {
+        let (Some(first), Some(last)) = (landings.first(), landings.last()) else {
             return;
         };
-        let key = (self.browse.selected_landing().map(|g| g.key), first.key);
+        let selected = self.browse.selected_landing().map(|g| g.key);
+        let key = (selected, first.key, last.key, self.rows);
         if self.prefetched == Some(key) {
             return;
         }
@@ -298,15 +305,16 @@ impl Browser {
             .or_else(|| Some(self.browse.landing(self.hovered?)?.lineups[0]))
             .or_else(next)
             .filter(|&id| Some(id) != self.shown);
-        if target.is_none() || target == self.prepared {
+        let Some(id) = target else { return };
+        // The decoder lets a prepared clip go when another opens, so ask again after one does.
+        let rows = viewer_rows(window);
+        let key = (id, self.shown, rows);
+        if self.prepared == Some(key) {
             return;
         }
-        self.prepared = target;
-        if let Some(id) = target {
-            let path = self.library.clip(id);
-            let rows = viewer_rows(window);
-            self.player.read(cx).prepare(path, rows);
-        }
+        self.prepared = Some(key);
+        let path = self.library.clip(id);
+        self.player.read(cx).prepare(path, rows);
     }
 
     /// Whether the viewer shows the clip, rather than a picture, and nothing covers it.
@@ -344,6 +352,8 @@ impl Render for Browser {
         let now = Instant::now();
         self.images.update(cx, |images, _| images.begin());
         self.rows = viewer_rows(window);
+        let rows = self.rows;
+        self.images.update(cx, |images, _| images.fit_rows(rows));
         self.across = map_across(window);
         let selected = self.browse.selected_lineup();
         self.slide.set(selected.is_some(), now);
@@ -473,10 +483,10 @@ impl Browser {
     fn lightbox(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let path = self.lightbox.as_ref()?;
         // An aim picture shows at the viewer's size until the full size is ready.
-        let image = self
-            .image(path, cx)
-            .ready()
-            .or_else(|| self.images.read(cx).peek(path, Look::Fit(self.rows)));
+        let image = self.image(path, cx).ready().or_else(|| {
+            let look = Look::Fit(self.rows);
+            self.images.update(cx, |images, _| images.peek(path, look))
+        });
         Some(
             div()
                 .id("lightbox")
@@ -514,7 +524,7 @@ fn ahead(browse: &Browse) -> Vec<LineupId> {
     let selected = browse
         .selected_landing()
         .and_then(|g| landings.iter().position(|l| l.key == g.key));
-    match selected {
+    let ids: Vec<LineupId> = match selected {
         Some(at) => landings[at]
             .lineups
             .iter()
@@ -526,7 +536,15 @@ fn ahead(browse: &Browse) -> Vec<LineupId> {
             .collect(),
         None if n > 0 => vec![landings[0].lineups[0], landings[n - 1].lineups[0]],
         None => Vec::new(),
+    };
+    // With one or two landings, the ones either side are the same.
+    let mut unique = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !unique.contains(&id) {
+            unique.push(id);
+        }
     }
+    unique
 }
 
 /// The pictures the browser first shows when it opens at `start`, and those its keys reach

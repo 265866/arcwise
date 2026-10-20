@@ -11,10 +11,12 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use gpui::{App, AsyncApp, Context, RenderImage, WeakEntity, prelude::*};
 
-/// Decoded pixels kept in memory, in bytes: room for both sides of a map and the pictures of
-/// the landings on and around the selected one, about 90 MB at most. The GPU holds a second
-/// copy of those drawn.
+/// Decoded pixels kept in memory, in bytes, for a viewer [`BUDGET_ROWS`] rows high: room for
+/// both sides of a map and the pictures of the landings on and around the selected one, about
+/// 90 MB at most. Bigger viewers show bigger pictures, and get more; see [`Images::fit_rows`].
+/// The GPU holds a second copy of those drawn.
 const BUDGET: usize = 128 << 20;
+const BUDGET_ROWS: u32 = 450;
 /// Map SVGs are drawn this many pixels across.
 const SVG_SIZE: u32 = 2048;
 
@@ -98,6 +100,8 @@ pub struct Images {
     /// Whether an image asked for with [`Images::get`] since the last [`Images::begin`] is still
     /// loading.
     waiting: bool,
+    /// Bytes kept; [`BUDGET`] until [`Images::fit_rows`] says otherwise.
+    budget: Option<usize>,
 }
 
 impl Images {
@@ -128,8 +132,12 @@ impl Images {
             };
             self.bytes += bytes;
             let used = self.clock;
-            self.entries(look)
-                .insert(path, Entry { image, bytes, used });
+            if let Some(replaced) = self
+                .entries(look)
+                .insert(path, Entry { image, bytes, used })
+            {
+                self.bytes -= replaced.bytes;
+            }
         }
     }
 
@@ -149,8 +157,20 @@ impl Images {
     }
 
     /// The image at `path`, drawn as `look`, if it is in memory, without loading it.
-    pub fn peek(&self, path: &Path, look: Look) -> Option<Arc<RenderImage>> {
-        self.entries.get(&look)?.get(path)?.image.ready()
+    pub fn peek(&mut self, path: &Path, look: Look) -> Option<Arc<RenderImage>> {
+        self.clock += 1;
+        let entry = self.entries.get_mut(&look)?.get_mut(path)?;
+        entry.used = self.clock;
+        entry.image.ready()
+    }
+
+    /// Sizes the budget for a viewer `rows` high, by the area of what it shows: 128 MB at 450
+    /// rows, up to four times that.
+    pub fn fit_rows(&mut self, rows: u32) {
+        let scale = (f64::from(rows) / f64::from(BUDGET_ROWS))
+            .powi(2)
+            .clamp(1., 4.);
+        self.budget = Some((BUDGET as f64 * scale) as usize);
     }
 
     pub fn get_as(&mut self, path: &Path, look: Look, cx: &mut Context<Self>) -> Image {
@@ -219,7 +239,7 @@ impl Images {
     /// Forgets the least recently used images until the rest fit the budget. Runs only when a
     /// decode finishes, outside any window's update, so `drop_image` reaches every window.
     fn evict(&mut self, cx: &mut App) {
-        while self.bytes > BUDGET {
+        while self.bytes > self.budget.unwrap_or(BUDGET) {
             let oldest = self
                 .entries
                 .iter()
@@ -559,6 +579,18 @@ mod tests {
             "never fewer rows than asked for"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_picture_seeded_twice_counts_once() {
+        let picture = || {
+            let image = image::RgbaImage::new(4, 4);
+            let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
+            (PathBuf::from("same.webp"), Look::Plain, Ok(image))
+        };
+        let mut images = Images::default();
+        images.seed(vec![picture(), picture()]);
+        assert_eq!(images.bytes, 4 * 4 * 4);
     }
 
     #[test]
