@@ -26,7 +26,7 @@ pub fn bar() -> Div {
         .px(px(16.))
         .border_b_1()
         .border_color(theme::line())
-        .bg(theme::panel())
+        .bg(theme::surface())
 }
 
 // The fixed shapes are SVGs, which GPUI draws as masks in its sprite atlas, tinted with the text

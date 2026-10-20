@@ -321,7 +321,7 @@ impl Render for Arcwise {
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme::bg())
+            .bg(theme::backdrop())
             .text_color(theme::text())
             .font_family(theme::FONT)
             .text_size(px(14.));

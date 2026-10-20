@@ -37,7 +37,7 @@ impl Browser {
                 .overflow_y_scroll()
                 .border_l_1()
                 .border_color(theme::alpha(theme::line(), open))
-                .bg(theme::panel())
+                .bg(theme::surface())
                 .child(
                     div()
                         .flex()

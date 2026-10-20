@@ -151,7 +151,7 @@ impl Browser {
                 .rounded(px(10.))
                 .border_1()
                 .border_color(theme::line())
-                .bg(theme::bg())
+                .bg(theme::backdrop())
                 .child(button(Side::Attack, cx))
                 .child(button(Side::Defense, cx)),
         )

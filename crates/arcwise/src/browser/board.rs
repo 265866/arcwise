@@ -37,7 +37,6 @@ impl Browser {
             .pt(px(16.))
             .px(px(20.))
             .pb(px(20.))
-            .bg(theme::bg())
             .child(self.ability_filter(cx))
             .child(
                 div()

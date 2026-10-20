@@ -6,13 +6,25 @@ use anyhow::Context as _;
 use arcwise_core::{AgentId, MapId, Side};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// The library folder chosen last.
     pub library: Option<PathBuf>,
     /// What was on screen last, to open on next time.
     pub last: Option<Last>,
+    /// Whether the window shows what is behind it, blurred.
+    pub blur: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            library: None,
+            last: None,
+            blur: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -71,6 +83,7 @@ mod tests {
                 agent: AgentId::new("a-sova"),
                 side: Side::Defense,
             }),
+            blur: false,
         };
         settings.write(&path).unwrap();
         assert_eq!(Settings::read(&path).unwrap(), settings);
@@ -81,5 +94,6 @@ mod tests {
     fn missing_fields_take_defaults() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
+        assert!(settings.blur, "blur is on until turned off");
     }
 }

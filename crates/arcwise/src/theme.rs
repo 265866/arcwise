@@ -1,7 +1,40 @@
 //! Colors and type, shared by every part of the window.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use arcwise_core::Rgb;
-use gpui::{Hsla, Rgba, rgb};
+use gpui::{Hsla, Rgba, WindowBackgroundAppearance, rgb};
+
+/// Whether the window shows what is behind it, blurred, through its background.
+static BLUR: AtomicBool = AtomicBool::new(false);
+
+pub fn set_blur(on: bool) {
+    BLUR.store(on, Ordering::Relaxed);
+}
+
+pub fn blur() -> bool {
+    BLUR.load(Ordering::Relaxed)
+}
+
+/// What the window asks Windows to draw behind it.
+pub fn window_background() -> WindowBackgroundAppearance {
+    if blur() {
+        WindowBackgroundAppearance::Blurred
+    } else {
+        WindowBackgroundAppearance::Opaque
+    }
+}
+
+/// The window's own background, see-through while [`blur`] is on. Dark enough that text stays
+/// readable over a white page behind the window.
+pub fn backdrop() -> Hsla {
+    alpha(bg(), if blur() { 0.78 } else { 1. })
+}
+
+/// The header and the lineup panel, laid over [`backdrop`].
+pub fn surface() -> Hsla {
+    alpha(panel(), if blur() { 0.5 } else { 1. })
+}
 
 pub fn bg() -> Rgba {
     rgb(0x0b0e13)
