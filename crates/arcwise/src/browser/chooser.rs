@@ -156,6 +156,15 @@ impl Browser {
                         .text_size(px(12.))
                         .child(plural(self.library.map_total(&map.id), "lineup")),
                 )
+                // Pointing at a map starts drawing it, which is usually done by the click.
+                .on_hover(cx.listener({
+                    let path = self.library.map_image(&map.id, self.browse.side());
+                    move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.images.update(cx, |images, cx| images.fetch(&path, cx));
+                        }
+                    }
+                }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.browse.choose_map(&this.library, id.clone());
                     cx.notify();
@@ -227,8 +236,23 @@ impl Browser {
                     .text_color(if on { theme::text() } else { theme::muted() })
                     .when(count == 0, |d| d.opacity(0.22))
                     .when(count > 0, |d| {
+                        let icons: Vec<_> = agent
+                            .abilities
+                            .iter()
+                            .map(|ab| self.library.ability_icon(ab.id))
+                            .collect();
                         d.cursor_pointer()
                             .hover(|s| s.bg(theme::raised()).text_color(theme::text()))
+                            // The markers wait for these icons; pointing at the agent starts them.
+                            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                if *hovered {
+                                    this.images.update(cx, |images, cx| {
+                                        for icon in &icons {
+                                            images.fetch(icon, cx);
+                                        }
+                                    });
+                                }
+                            }))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.browse.choose_agent(&this.library, id.clone());
                                 cx.notify();

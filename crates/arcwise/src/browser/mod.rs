@@ -54,6 +54,8 @@ pub struct Browser {
     shown: Option<LineupId>,
     /// The landing whose neighbours' stills were last fetched ahead.
     prefetched: Option<LandingKey>,
+    /// The map and side whose other side was last fetched ahead.
+    prefetched_map: Option<(MapId, Side)>,
     /// The choice last emitted as [`Chosen`].
     chosen: Option<Chosen>,
 }
@@ -85,6 +87,7 @@ impl Browser {
             slide: Slide::closed(),
             shown: None,
             prefetched: None,
+            prefetched_map: None,
             chosen: None,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
@@ -128,6 +131,22 @@ impl Browser {
     pub fn release_all(&mut self, cx: &mut Context<Self>) {
         self.images.update(cx, |images, cx| images.clear(cx));
         self.player.update(cx, |player, cx| player.release_all(cx));
+    }
+
+    /// Fetches the other side's map, so the side switch shows it at once.
+    fn prefetch_map(&mut self, cx: &mut Context<Self>) {
+        let Some(map) = self.browse.map() else { return };
+        let key = (map.clone(), self.browse.side());
+        if self.prefetched_map.as_ref() == Some(&key) {
+            return;
+        }
+        let other = key.1.other();
+        self.prefetched_map = Some(key);
+        if self.browse.side_count(&self.library, other) == 0 {
+            return;
+        }
+        let path = self.library.map_image(map, other);
+        self.images.update(cx, |images, cx| images.fetch(&path, cx));
     }
 
     /// Fetches the pictures the keys can reach next: every stand spot of the selected landing,
@@ -215,6 +234,7 @@ impl Render for Browser {
             self.shown = None;
         }
         self.sync_player(window, cx);
+        self.prefetch_map(cx);
         self.prefetch(cx);
         self.emit_choice(cx);
         div()
