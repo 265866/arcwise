@@ -25,7 +25,20 @@ use crate::settings::Settings;
 const WINDOW_WIDTH: f32 = 1440.;
 const WINDOW_HEIGHT: f32 = 900.;
 
+/// Creates the named mutex the uninstaller looks for to tell that Arcwise is running; the name
+/// must match `installer/arcwise.iss`. The handle is never closed, so the mutex lasts exactly as
+/// long as the process.
+#[cfg(windows)]
+fn announce_running() {
+    use windows::{Win32::System::Threading::CreateMutexW, core::w};
+    // SAFETY: the name is a static NUL-terminated wide string and no security attributes are
+    // passed.
+    let _ = unsafe { CreateMutexW(None, false, w!("Arcwise.Running")) };
+}
+
 fn main() {
+    #[cfg(windows)]
+    announce_running();
     trace::init();
     let args = Args::parse(std::env::args_os().skip(1));
     let settings = Settings::load();
