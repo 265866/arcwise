@@ -67,6 +67,8 @@ pub struct Browser {
     parts: Option<Parts>,
     /// Whether the last render showed a picture that was still loading.
     waiting: bool,
+    /// The most rows the viewer shows, from the last render; see [`viewer_rows`].
+    rows: u32,
 }
 
 impl EventEmitter<Chosen> for Browser {}
@@ -111,17 +113,27 @@ impl Browser {
             chosen: None,
             parts: None,
             waiting: false,
+            rows: viewer_rows_for(crate::WINDOW_WIDTH, 1.),
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
             let path = this.library.portrait(&agent.id);
-            this.images.update(cx, |images, cx| images.fetch(&path, cx));
+            this.images
+                .update(cx, |images, cx| images.fetch(&path, Look::Plain, cx));
         }
         this
     }
 
     fn image(&self, path: &Path, cx: &mut Context<Self>) -> Image {
         self.images.update(cx, |images, cx| images.get(path, cx))
+    }
+
+    /// A lineup's aim picture, shrunk to the viewer's size.
+    fn aim(&self, id: LineupId, cx: &mut Context<Self>) -> Image {
+        let path = self.library.aim_image(id);
+        let look = Look::Fit(self.rows);
+        self.images
+            .update(cx, |images, cx| images.get_as(&path, look, cx))
     }
 
     fn emit_choice(&mut self, cx: &mut Context<Self>) {
@@ -172,19 +184,20 @@ impl Browser {
             return;
         }
         let path = self.library.map_image(map, other);
-        self.images.update(cx, |images, cx| images.fetch(&path, cx));
+        self.images
+            .update(cx, |images, cx| images.fetch(&path, Look::Plain, cx));
     }
 
     /// Fetches the pictures the panel shows for a lineup.
     fn fetch_lineup(&self, id: LineupId, cx: &mut Context<Self>) {
-        let paths = [
-            self.library.start_still(id),
-            self.library.end_still(id),
-            self.library.aim_image(id),
+        let pictures = [
+            (self.library.start_still(id), Look::Plain),
+            (self.library.end_still(id), Look::Plain),
+            (self.library.aim_image(id), Look::Fit(self.rows)),
         ];
         self.images.update(cx, |images, cx| {
-            for path in &paths {
-                images.fetch(path, cx);
+            for (path, look) in &pictures {
+                images.fetch(path, *look, cx);
             }
         });
     }
@@ -263,6 +276,7 @@ impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
         self.images.update(cx, |images, _| images.begin());
+        self.rows = viewer_rows(window);
         let selected = self.browse.selected_lineup();
         self.slide.set(selected.is_some(), now);
         let open = self.slide.at(now);
@@ -361,7 +375,11 @@ impl Browser {
     /// The picture in the lightbox, fitted to the window; any click closes it.
     fn lightbox(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let path = self.lightbox.as_ref()?;
-        let image = self.image(path, cx).ready();
+        // An aim picture shows at the viewer's size until the full size is ready.
+        let image = self
+            .image(path, cx)
+            .ready()
+            .or_else(|| self.images.read(cx).peek(path, Look::Fit(self.rows)));
         Some(
             div()
                 .id("lightbox")
@@ -437,14 +455,18 @@ pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
             paths.extend(agent.abilities.iter().map(|ab| library.ability_icon(ab.id)));
         }
         for id in ahead(&browse) {
-            paths.extend([
-                library.start_still(id),
-                library.end_still(id),
-                library.aim_image(id),
-            ]);
+            paths.extend([library.start_still(id), library.end_still(id)]);
         }
     }
-    paths.into_iter().map(|path| (path, Look::Plain)).collect()
+    let mut pictures: Vec<_> = paths.into_iter().map(|path| (path, Look::Plain)).collect();
+    // At the window's first size; a display that scales it decodes them again at its own.
+    let rows = viewer_rows_for(crate::WINDOW_WIDTH, 1.);
+    pictures.extend(
+        ahead(&browse)
+            .into_iter()
+            .map(|id| (library.aim_image(id), Look::Fit(rows))),
+    );
+    pictures
 }
 
 /// `n word`, with an `s` unless `n` is 1.
@@ -460,8 +482,16 @@ fn plural(n: usize, word: &str) -> String {
 /// less the panel's padding, at 16:9. Rounded up to a multiple of 90 rows (a 16th of 1440p),
 /// so small changes to the window do not reopen clips at a new size.
 fn viewer_rows(window: &Window) -> u32 {
-    let width = f32::from(window.viewport_size().width) / 2. - 48.;
-    let rows = (width * 9. / 16. * window.scale_factor()).max(360.);
+    viewer_rows_for(
+        f32::from(window.viewport_size().width),
+        window.scale_factor(),
+    )
+}
+
+/// [`viewer_rows`] for a window `width` wide at `scale`.
+fn viewer_rows_for(width: f32, scale: f32) -> u32 {
+    let width = width / 2. - 48.;
+    let rows = (width * 9. / 16. * scale).max(360.);
     (rows / 90.).ceil() as u32 * 90
 }
 

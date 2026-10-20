@@ -16,6 +16,9 @@ mod ui;
 
 use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
 
+/// The window's width when it opens.
+const WINDOW_WIDTH: f32 = 1440.;
+
 use crate::app::Arcwise;
 use crate::args::Args;
 use crate::settings::Settings;
@@ -33,7 +36,7 @@ fn main() {
             .detach();
         }
         browser::bind_keys(cx);
-        let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+        let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(900.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

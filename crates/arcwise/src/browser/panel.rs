@@ -10,7 +10,7 @@ use gpui::{
 
 use super::Browser;
 use super::board::place;
-use crate::images::Image;
+use crate::images::{Image, Look};
 use crate::{theme, ui};
 
 /// How far the stand view zooms into the map.
@@ -194,7 +194,7 @@ impl Browser {
                 .child(div().absolute().inset_0().child(self.player.clone()))
                 .into_any_element(),
             View::Stand => self.stand_zoom(lineup, color, px(16.), cx),
-            View::Aim => match self.image(&self.library.aim_image(lineup.id), cx) {
+            View::Aim => match self.aim(lineup.id, cx) {
                 Image::Missing => missing("This lineup has no aim picture. Follow the clip."),
                 image => picture(image.ready(), false),
             },
@@ -205,11 +205,12 @@ impl Browser {
         };
         // The aim and landing pictures open full size when clicked.
         let zoom = match view {
-            View::Aim => Some(self.library.aim_image(lineup.id)),
-            View::Lands => Some(self.library.end_still(lineup.id)),
+            View::Aim => matches!(self.aim(lineup.id, cx), Image::Ready(_))
+                .then(|| self.library.aim_image(lineup.id)),
+            View::Lands => Some(self.library.end_still(lineup.id))
+                .filter(|path| matches!(self.image(path, cx), Image::Ready(_))),
             View::Clip | View::Stand => None,
-        }
-        .filter(|path| matches!(self.image(path, cx), Image::Ready(_)));
+        };
         let note = matches!(view, View::Clip | View::Aim)
             .then(|| lineup.steps.as_ref()?.note.clone())
             .flatten();
@@ -224,7 +225,15 @@ impl Browser {
             .border_color(theme::line())
             .bg(gpui::black())
             .when_some(zoom, |d, path| {
+                let full = path.clone();
                 d.cursor_pointer()
+                    // The aim picture shows shrunk; pointing at it starts the full size.
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.images
+                                .update(cx, |images, cx| images.fetch(&full, Look::Plain, cx));
+                        }
+                    }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.lightbox = Some(path.clone());
                         cx.notify();
@@ -313,7 +322,7 @@ impl Browser {
     fn step_tiles(&self, lineup: &Lineup, color: Hsla, cx: &mut Context<Self>) -> Div {
         let view = self.peek_view.unwrap_or(self.browse.view());
         let pinned = self.browse.view();
-        let aim = self.image(&self.library.aim_image(lineup.id), cx);
+        let aim = self.aim(lineup.id, cx);
         let has_aim = !matches!(aim, Image::Missing);
         let tiles = [
             (

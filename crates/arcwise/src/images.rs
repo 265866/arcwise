@@ -71,13 +71,15 @@ pub enum Look {
     Plain,
     /// Black wherever the image is opaque: an icon to draw over a bright fill.
     Silhouette,
+    /// Shrunk by a whole factor while it keeps at least this many rows, for a picture shown
+    /// smaller than it is drawn.
+    Fit(u32),
 }
 
 #[derive(Default)]
 pub struct Images {
     /// One map per look, so a lookup by `&Path` needs no allocation.
-    plain: HashMap<PathBuf, Entry>,
-    silhouette: HashMap<PathBuf, Entry>,
+    entries: HashMap<Look, HashMap<PathBuf, Entry>>,
     bytes: usize,
     clock: u64,
     /// Whether an image asked for with [`Images::get`] since the last [`Images::begin`] is still
@@ -87,10 +89,7 @@ pub struct Images {
 
 impl Images {
     fn entries(&mut self, look: Look) -> &mut HashMap<PathBuf, Entry> {
-        match look {
-            Look::Plain => &mut self.plain,
-            Look::Silhouette => &mut self.silhouette,
-        }
+        self.entries.entry(look).or_default()
     }
 
     /// The image at `path`, starting to load it if it is not in memory.
@@ -132,8 +131,13 @@ impl Images {
     }
 
     /// Starts loading the image at `path` for later, without counting it as on screen.
-    pub fn fetch(&mut self, path: &Path, cx: &mut Context<Self>) {
-        self.load(path, Look::Plain, cx);
+    pub fn fetch(&mut self, path: &Path, look: Look, cx: &mut Context<Self>) {
+        self.load(path, look, cx);
+    }
+
+    /// The image at `path`, drawn as `look`, if it is in memory, without loading it.
+    pub fn peek(&self, path: &Path, look: Look) -> Option<Arc<RenderImage>> {
+        self.entries.get(&look)?.get(path)?.image.ready()
     }
 
     pub fn get_as(&mut self, path: &Path, look: Look, cx: &mut Context<Self>) -> Image {
@@ -203,20 +207,18 @@ impl Images {
     /// decode finishes, outside any window's update, so `drop_image` reaches every window.
     fn evict(&mut self, cx: &mut App) {
         while self.bytes > BUDGET {
-            let oldest = [Look::Plain, Look::Silhouette]
-                .into_iter()
-                .flat_map(|look| {
-                    let entries = match look {
-                        Look::Plain => &self.plain,
-                        Look::Silhouette => &self.silhouette,
-                    };
+            let oldest = self
+                .entries
+                .iter()
+                .flat_map(|(&look, entries)| {
                     entries
                         .iter()
                         .filter(|(_, e)| e.bytes > 0)
-                        .map(move |(path, e)| (e.used, look, path.clone()))
+                        .map(move |(path, e)| (e.used, look, path))
                 })
-                .min_by_key(|(used, ..)| *used);
-            let Some((_, look, path)) = oldest else { break };
+                .min_by_key(|(used, ..)| *used)
+                .map(|(_, look, path)| (look, path.clone()));
+            let Some((look, path)) = oldest else { break };
             if let Some(entry) = self.entries(look).remove(&path) {
                 self.bytes -= entry.bytes;
                 if let Image::Ready(image) = entry.image {
@@ -228,7 +230,7 @@ impl Images {
 
     /// Frees every image, before the store is dropped. Call outside any window's update.
     pub fn clear(&mut self, cx: &mut App) {
-        for (_, entry) in self.plain.drain().chain(self.silhouette.drain()) {
+        for (_, entry) in self.entries.drain().flat_map(|(_, entries)| entries) {
             if let Image::Ready(image) = entry.image {
                 cx.drop_image(image, None);
             }
@@ -265,12 +267,43 @@ fn decode_now(path: &Path, look: Look) -> anyhow::Result<Arc<RenderImage>> {
     };
     for px in pixels.pixels_mut() {
         match look {
-            Look::Plain if !bgra => px.0.swap(0, 2),
-            Look::Plain => {}
             Look::Silhouette => px.0[..3].fill(0),
+            Look::Plain | Look::Fit(_) if !bgra => px.0.swap(0, 2),
+            Look::Plain | Look::Fit(_) => {}
         }
     }
+    if let Look::Fit(rows) = look {
+        let factor = (pixels.height() / rows.max(1)).max(1);
+        pixels = shrink(pixels, factor);
+    }
     Ok(Arc::new(RenderImage::new([image::Frame::new(pixels)])))
+}
+
+/// Shrinks a picture by a whole factor, each pixel the average of a `factor`-wide square.
+fn shrink(image: image::RgbaImage, factor: u32) -> image::RgbaImage {
+    if factor <= 1 {
+        return image;
+    }
+    let (width, height) = (image.width() / factor, image.height() / factor);
+    let stride = image.width() as usize * 4;
+    let src = image.as_raw();
+    let area = factor * factor;
+    let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let mut sum = [0u32; 4];
+            for row in 0..factor as usize {
+                let start = (y * factor as usize + row) * stride + x * factor as usize * 4;
+                for px in src[start..start + factor as usize * 4].as_chunks::<4>().0 {
+                    for (total, &channel) in sum.iter_mut().zip(px) {
+                        *total += u32::from(channel);
+                    }
+                }
+            }
+            out.extend(sum.map(|total| ((total + area / 2) / area) as u8));
+        }
+    }
+    image::RgbaImage::from_raw(width, height, out).expect("the buffer fits the size")
 }
 
 /// Decodes a WebP picture to BGRA with libwebp, three times faster than the `image` crate's
@@ -390,6 +423,50 @@ mod tests {
         assert_eq!(&silhouette.as_bytes(0).unwrap()[..4], &[0, 0, 0, 255]);
         std::fs::write(&path, b"RIFF....WEBPVP8 broken").unwrap();
         assert!(decode(&path, Look::Plain).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn shrinks_by_averaging_whole_squares() {
+        let mut image = image::RgbaImage::new(4, 2);
+        for (x, _, px) in image.enumerate_pixels_mut() {
+            px.0 = if x == 0 {
+                [200, 100, 0, 255]
+            } else {
+                [0, 0, 0, 255]
+            };
+        }
+        let half = shrink(image.clone(), 2);
+        assert_eq!(half.dimensions(), (2, 1));
+        assert_eq!(half.get_pixel(0, 0).0, [100, 50, 0, 255]);
+        assert_eq!(half.get_pixel(1, 0).0, [0, 0, 0, 255]);
+        assert_eq!(shrink(image, 1).dimensions(), (4, 2));
+    }
+
+    #[test]
+    fn fits_a_picture_to_at_least_the_rows_asked_for() {
+        let dir = std::env::temp_dir().join(format!("arcwise-fit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("grey.png");
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([90, 90, 90, 255]))
+            .save(&path)
+            .unwrap();
+        let size = |look| {
+            let image = decode(&path, look).unwrap();
+            let size = image.size(0);
+            (size.width.0, size.height.0)
+        };
+        assert_eq!(size(Look::Fit(3)), (4, 3));
+        assert_eq!(
+            size(Look::Fit(2)),
+            (2, 2),
+            "a third, the most that keeps two rows"
+        );
+        assert_eq!(
+            size(Look::Fit(4)),
+            (8, 6),
+            "never fewer rows than asked for"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

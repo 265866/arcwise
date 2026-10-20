@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use super::{Browser, plural};
+use crate::images::Look;
 use crate::{theme, ui};
 
 impl Browser {
@@ -158,7 +159,8 @@ impl Browser {
                     let path = self.library.map_image(&map.id, self.browse.side());
                     move |this, hovered: &bool, _, cx| {
                         if *hovered {
-                            this.images.update(cx, |images, cx| images.fetch(&path, cx));
+                            this.images
+                                .update(cx, |images, cx| images.fetch(&path, Look::Plain, cx));
                         }
                     }
                 }))
@@ -245,7 +247,7 @@ impl Browser {
                                 if *hovered {
                                     this.images.update(cx, |images, cx| {
                                         for icon in &icons {
-                                            images.fetch(icon, cx);
+                                            images.fetch(icon, Look::Plain, cx);
                                         }
                                     });
                                 }
