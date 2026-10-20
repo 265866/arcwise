@@ -1,0 +1,117 @@
+name: Release build
+
+# Builds the installer, zip and checksums that a release attaches. The release workflow calls it.
+# It also runs on PRs that change what goes into the build, and by hand from the Actions tab.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit or tag to build
+        type: string
+        required: true
+    outputs:
+      version:
+        description: The version that was built, such as 0.2.0
+        value: ${{ jobs.build.outputs.version }}
+      artifact:
+        description: The name of the uploaded artifact
+        value: ${{ jobs.build.outputs.artifact }}
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .cargo/**
+      - .github/workflows/build-release.yml
+      - Cargo.lock
+      - Cargo.toml
+      - LICENSE
+      - about.hbs
+      - about.toml
+      - crates/*/Cargo.toml
+      - crates/arcwise/assets/**
+      - crates/arcwise/build.rs
+      - installer/**
+      - rust-toolchain.toml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Installer
+    runs-on: windows-2025
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact: ${{ steps.version.outputs.artifact }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+
+      - run: cargo build --release --locked -p arcwise
+
+      - name: Check the exe runs without the Visual C++ runtime
+        run: |
+          $exe = [IO.File]::ReadAllBytes('target\release\arcwise.exe')
+          if ([Text.Encoding]::ASCII.GetString($exe).Contains('VCRUNTIME140')) {
+            throw 'arcwise.exe imports VCRUNTIME140.dll, so +crt-static from .cargo/config.toml was not applied.'
+          }
+
+      # A clarification in about.toml that no longer applies, such as a license file whose checksum
+      # changed, is only logged, and a clean run logs nothing. So any output fails the step.
+      - name: Write the license notices
+        shell: bash
+        run: |
+          status=0
+          cargo about generate --locked --fail about.hbs -o target/release/THIRD-PARTY-LICENSES.html 2> "$RUNNER_TEMP/about.log" || status=$?
+          cat "$RUNNER_TEMP/about.log" >&2
+          [ "$status" -eq 0 ] && [ ! -s "$RUNNER_TEMP/about.log" ]
+
+      - name: Read the version
+        id: version
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object name -eq 'arcwise').version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "artifact=arcwise-$version" >> $env:GITHUB_OUTPUT
+
+      # The runner has Inno Setup through Chocolatey, which puts ISCC on the path.
+      - name: Build the installer
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: iscc /Qp "/DAppVersion=$env:VERSION" installer\arcwise.iss
+
+      - name: Zip and write checksums
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $staging = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\arcwise-$env:VERSION"
+          Copy-Item target\release\arcwise.exe, target\release\THIRD-PARTY-LICENSES.html $staging
+          Copy-Item LICENSE (Join-Path $staging 'LICENSE.txt')
+          Compress-Archive -Path "$staging\*" -DestinationPath "dist\arcwise-$env:VERSION-x64.zip"
+          # sha256sum -c rejects lines that end in CR, so join with LF only.
+          $sums = Get-ChildItem dist -File | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)`n"
+          }
+          [IO.File]::WriteAllText("$PWD\dist\SHA256SUMS.txt", -join $sums)
+          Get-Content dist\SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.version.outputs.artifact }}
+          path: dist/*
+          if-no-files-found: error

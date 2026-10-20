@@ -1,0 +1,80 @@
+# cargo-about writes THIRD-PARTY-LICENSES.html for release builds from about.hbs. Keep this list in
+# step with [licenses] in deny.toml.
+accepted = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+targets = ["x86_64-pc-windows-msvc"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# The crates below have license text cargo-about cannot recognize on its own, so they would get
+# the canonical text without their copyright lines. Each checksum pins the file it was read from.
+
+# libwebp-sys compiles Google's libwebp into the exe, under libwebp's own BSD license.
+[libwebp-sys.clarify]
+license = "MIT AND BSD-3-Clause"
+[[libwebp-sys.clarify.files]]
+path = "vendor/COPYING"
+license = "BSD-3-Clause"
+checksum = "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+
+[exr.clarify]
+license = "BSD-3-Clause"
+[[exr.clarify.files]]
+path = "LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "97e4d3aa7a9e8ac31979c16ca8bb2b628a9cb72c3362185ad2bf4ad77f43551f"
+
+[sha1_smol.clarify]
+license = "BSD-3-Clause"
+[[sha1_smol.clarify.files]]
+path = "LICENSE"
+license = "BSD-3-Clause"
+checksum = "282a21b0710441c364025461a447362daf18f5798a7b72ae2f801a2aa536da51"
+
+[libm.clarify]
+license = "MIT"
+[[libm.clarify.files]]
+path = "LICENSE.txt"
+license = "MIT"
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+
+# Published without a license file; read from the repository at the published commit.
+[taffy.clarify]
+license = "MIT"
+[[taffy.clarify.git]]
+path = "LICENSE"
+license = "MIT"
+checksum = "f97daf1a0124413dccf399a4e6626b4b74acd05282f80b6d64ac82225650b77a"
+
+[pulp-wasm-simd-flag.clarify]
+license = "MIT"
+[[pulp-wasm-simd-flag.clarify.git]]
+path = "LICENSE"
+license = "MIT"
+checksum = "d64f878c89bd5f1e5ada7e4aad57690b122727cf5229b7b87ea1980c188da1d9"
+
+[arcwise.clarify]
+license = "MIT"
+[[arcwise.clarify.files]]
+path = "../../LICENSE"
+license = "MIT"
+checksum = "8f7b88022d6b2555705ba8e8df138ffe9a95c0fc0fa0dae8051d2bed7a0cba0f"
+
+[arcwise-core.clarify]
+license = "MIT"
+[[arcwise-core.clarify.files]]
+path = "../../LICENSE"
+license = "MIT"
+checksum = "8f7b88022d6b2555705ba8e8df138ffe9a95c0fc0fa0dae8051d2bed7a0cba0f"
+
+[arcwise-video.clarify]
+license = "MIT"
+[[arcwise-video.clarify.files]]
+path = "../../LICENSE"
+license = "MIT"
+checksum = "8f7b88022d6b2555705ba8e8df138ffe9a95c0fc0fa0dae8051d2bed7a0cba0f"

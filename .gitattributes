@@ -1,0 +1,2 @@
+# about.toml pins the bytes of LICENSE, so it checks out the same on every platform.
+LICENSE text eol=lf
