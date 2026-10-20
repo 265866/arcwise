@@ -526,6 +526,8 @@ fn open(
         }
         // Converts the decoder's output to the BGRA asked for below.
         attributes.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)?;
+        // Fewer frames held inside the decoder: about 12 MB less per clip open.
+        attributes.SetUINT32(&MF_LOW_LATENCY, 1)?;
         let reader = MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), &attributes)?;
         reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
         reader.SetStreamSelection(VIDEO, true)?;
