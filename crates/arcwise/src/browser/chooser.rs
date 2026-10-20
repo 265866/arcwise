@@ -3,15 +3,12 @@
 
 use arcwise_core::{Chooser, Role};
 use gpui::{
-    AnyElement, Context, Div, FontWeight, IntoElement, MouseButton, Pixels, Window, anchored,
-    deferred, div, point, prelude::*, px,
+    AnyElement, Context, Div, FontWeight, IntoElement, MouseButton, Window, anchored, deferred,
+    div, point, prelude::*, px,
 };
 
 use super::{Browser, plural};
 use crate::{theme, ui};
-
-/// The header's height; dropdowns open just below it.
-const HEADER: Pixels = px(60.);
 
 impl Browser {
     /// The chooser's card: the first-run dialog, or a dropdown's contents.
@@ -31,7 +28,7 @@ impl Browser {
             .flex()
             .flex_col()
             .gap(px(18.))
-            .max_h(window.viewport_size().height - HEADER - px(30.))
+            .max_h(window.viewport_size().height - ui::BAR_HEIGHT - px(30.))
             .overflow_y_scroll()
             .border_1()
             .border_color(theme::line())
@@ -82,7 +79,7 @@ impl Browser {
         Some(if self.browse.dropdown() {
             div()
                 .absolute()
-                .top(HEADER)
+                .top(ui::BAR_HEIGHT)
                 .left_0()
                 .right_0()
                 .bottom_0()

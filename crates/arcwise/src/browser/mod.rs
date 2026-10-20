@@ -5,6 +5,7 @@ mod chooser;
 mod header;
 mod keys;
 mod panel;
+mod part;
 mod slide;
 
 pub use keys::bind as bind_keys;
@@ -17,12 +18,14 @@ use std::time::Instant;
 
 use arcwise_core::{AgentId, Browse, LandingKey, Library, LineupId, MapId, Side, Start, View};
 use gpui::{
-    Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Pixels, Window,
-    div, prelude::*,
+    Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Pixels,
+    StyleRefinement, Window, div, prelude::*,
 };
 
 use crate::images::{Image, Images};
 use crate::player::Player;
+use crate::ui;
+use part::Part;
 use slide::Slide;
 
 /// Emitted when the map, agent or side on screen changes.
@@ -58,6 +61,10 @@ pub struct Browser {
     prefetched_map: Option<(MapId, Side)>,
     /// The choice last emitted as [`Chosen`].
     chosen: Option<Chosen>,
+    /// The header and map, as views of their own; made on the first render.
+    parts: Option<Parts>,
+    /// Whether the last render showed a picture that was still loading.
+    waiting: bool,
 }
 
 impl EventEmitter<Chosen> for Browser {}
@@ -89,6 +96,8 @@ impl Browser {
             prefetched: None,
             prefetched_map: None,
             chosen: None,
+            parts: None,
+            waiting: false,
         };
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
@@ -123,7 +132,11 @@ impl Browser {
     /// Whether everything on screen has loaded: no picture is still decoding, and a clip in view
     /// is showing its frames.
     pub fn settled(&self, cx: &gpui::App) -> bool {
-        !self.images.read(cx).waiting() && !self.player.read(cx).waiting()
+        !self.waiting
+            && !self.player.read(cx).waiting()
+            && self.parts.as_ref().is_none_or(|parts| {
+                !parts.header.read(cx).waiting() && !parts.map.read(cx).waiting()
+            })
     }
 
     /// Frees every image and frame this screen holds, before it is dropped. Call outside any
@@ -237,7 +250,8 @@ impl Render for Browser {
         self.prefetch_map(cx);
         self.prefetch(cx);
         self.emit_choice(cx);
-        div()
+        let parts = self.parts(cx);
+        let element = div()
             .track_focus(&self.focus)
             .key_context(keys::CONTEXT)
             .on_action(cx.listener(Self::next_landing))
@@ -257,17 +271,60 @@ impl Render for Browser {
             .relative()
             .flex()
             .flex_col()
-            .child(self.header(window, cx))
+            .child(
+                parts.header.cached(
+                    StyleRefinement::default()
+                        .w_full()
+                        .h(ui::BAR_HEIGHT)
+                        .flex_none(),
+                ),
+            )
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.map_column(cx))
+                    .child(
+                        parts
+                            .map
+                            .cached(StyleRefinement::default().flex_1().min_w_0().h_full()),
+                    )
                     .children(self.panel(open, cx)),
             )
             .children(self.chooser(window, cx))
-            .children(self.lightbox(cx))
+            .children(self.lightbox(cx));
+        self.waiting = self.images.read(cx).waiting();
+        element
+    }
+}
+
+/// The browser's parts that GPUI can reuse from the last frame.
+struct Parts {
+    header: Entity<Part>,
+    map: Entity<Part>,
+}
+
+impl Browser {
+    fn parts(&mut self, cx: &mut Context<Self>) -> Parts {
+        let parts = self.parts.get_or_insert_with(|| {
+            let browser = cx.entity();
+            Parts {
+                header: cx.new(|cx| {
+                    Part::new(
+                        &browser,
+                        |b, window, cx| b.header(window, cx).into_any_element(),
+                        cx,
+                    )
+                }),
+                map: cx.new(|cx| {
+                    Part::new(&browser, |b, _, cx| b.map_column(cx).into_any_element(), cx)
+                }),
+            }
+        });
+        Parts {
+            header: parts.header.clone(),
+            map: parts.map.clone(),
+        }
     }
 }
 

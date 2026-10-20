@@ -12,10 +12,13 @@ use gpui::{
 
 use crate::theme;
 
+/// The header bar's height.
+pub const BAR_HEIGHT: Pixels = px(60.);
+
 /// The header bar along the top of the window.
 pub fn bar() -> Div {
     div()
-        .h(px(60.))
+        .h(BAR_HEIGHT)
         .flex_none()
         .flex()
         .items_center()
@@ -171,7 +174,8 @@ pub fn measure(into: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
     canvas(
         move |bounds, window, _| {
             if into.replace(bounds) != bounds {
-                window.refresh();
+                // Draws the measuring view again; a refresh during a frame does nothing.
+                window.request_animation_frame();
             }
         },
         |_, _, _, _| {},
