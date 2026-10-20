@@ -55,6 +55,11 @@ Source: "{#BuildDir}\arcwise.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\THIRD-PARTY-LICENSES.html"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
+[UninstallDelete]
+; Installers the app downloaded to update itself (see crates/arcwise/src/update.rs).
+Type: filesandordirs; Name: "{localappdata}\Arcwise\updates"
+Type: dirifempty; Name: "{localappdata}\Arcwise"
+
 [Icons]
 Name: "{autoprograms}\Arcwise"; Filename: "{app}\arcwise.exe"
 Name: "{autodesktop}\Arcwise"; Filename: "{app}\arcwise.exe"; Tasks: desktopicon
