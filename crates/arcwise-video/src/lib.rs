@@ -55,6 +55,10 @@ enum Command {
         max_height: Option<u32>,
     },
     Stop,
+    Prepare {
+        path: PathBuf,
+        max_height: Option<u32>,
+    },
 }
 
 /// A handle to the decode thread. Dropping it ends the thread.
@@ -88,6 +92,16 @@ impl Decoder {
         // Sending fails only once the thread has gone, which reports itself through an event.
         let _ = self.commands.send(Command::Open {
             generation,
+            path: path.into(),
+            max_height,
+        });
+    }
+
+    /// Opens `path` ahead of time and decodes its first frame, so that an [`Decoder::open`] of
+    /// it with the same `max_height` shows that frame at once rather than about 20 ms later.
+    /// Only the latest clip prepared is kept, and a clip playing carries on meanwhile.
+    pub fn prepare(&self, path: impl Into<PathBuf>, max_height: Option<u32>) {
+        let _ = self.commands.send(Command::Prepare {
             path: path.into(),
             max_height,
         });

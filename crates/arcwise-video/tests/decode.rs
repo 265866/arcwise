@@ -139,6 +139,58 @@ fn stop_pauses_until_the_next_open() {
     next_frame(&decoder, 2);
 }
 
+#[test]
+fn a_prepared_clip_opens_at_its_first_frame() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.prepare(fixture(), Some(90));
+    decoder.open(1, fixture(), Some(90));
+    assert!(matches!(
+        next_event(&decoder),
+        Event::Opened { generation: 1, .. }
+    ));
+    let first = next_frame(&decoder, 1);
+    assert_eq!(
+        (first.width, first.height, first.pts),
+        (160, 90, Duration::ZERO)
+    );
+    let second = next_frame(&decoder, 1);
+    assert!(second.pts > first.pts, "plays on from the prepared reader");
+}
+
+#[test]
+fn preparing_does_not_interrupt_the_clip_playing() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.open(1, fixture(), None);
+    let mut last = next_frame(&decoder, 1).pts;
+    decoder.prepare(fixture(), Some(90));
+    for _ in 0..10 {
+        let frame = next_frame(&decoder, 1);
+        assert_eq!((frame.width, frame.height), (320, 180));
+        assert!(frame.pts > last);
+        last = frame.pts;
+    }
+}
+
+#[test]
+fn a_clip_prepared_at_another_size_opens_afresh() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.prepare(fixture(), Some(90));
+    decoder.open(1, fixture(), None);
+    let frame = next_frame(&decoder, 1);
+    assert_eq!((frame.width, frame.height), (320, 180));
+}
+
+#[test]
+fn a_missing_clip_prepared_still_fails_to_open() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.prepare("no/such/clip.mp4", None);
+    decoder.open(4, "no/such/clip.mp4", None);
+    assert!(matches!(
+        next_event(&decoder),
+        Event::Failed { generation: 4, .. }
+    ));
+}
+
 /// Decodes a clip of your own, such as an AV1 one, which needs Windows' AV1 Video Extension:
 /// `ARCWISE_CLIP=<file> cargo test -p arcwise-video -- --ignored`.
 #[test]

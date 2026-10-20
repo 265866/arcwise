@@ -1,9 +1,9 @@
 //! The decode thread.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender, select};
+use crossbeam_channel::{Receiver, Select, Sender};
 use windows::Win32::Foundation::{E_FAIL, HANDLE, HMODULE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::*;
@@ -59,40 +59,76 @@ pub fn run(commands: Receiver<Command>, frames: Sender<Frame>, events: Sender<Ev
 fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<Event>) {
     // Without a usable GPU, decode in software rather than not at all.
     let mut device = Device::new().ok();
+    let mut ready: Option<Prepared> = None;
     let mut next = commands.recv().ok();
     while let Some(command) = next.take() {
-        let Command::Open {
-            generation,
-            path,
-            max_height,
-        } = command
-        else {
-            next = commands.recv().ok();
-            continue;
-        };
-        let mut clip = Clip {
-            generation,
-            device: device.as_mut(),
-            commands,
-            frames,
-            events,
-        };
-        next = match clip.play(&path, max_height) {
-            Ok(command) => command,
-            Err(e) => {
-                let _ = events.send(Event::Failed {
-                    generation,
-                    error: format!("{}: {}", path.display(), e.message()),
-                    codec_missing: e.code() == MF_E_TOPO_CODEC_NOT_FOUND,
-                });
-                // A driver update or GPU reset takes the device away; make a new one for the
-                // next clip rather than failing every clip until a restart.
-                if e.code() == DXGI_ERROR_DEVICE_REMOVED || e.code() == DXGI_ERROR_DEVICE_RESET {
-                    device = Device::new().ok();
-                }
+        next = match latest(commands, command) {
+            Command::Stop => commands.recv().ok(),
+            Command::Prepare { path, max_height } => {
+                ready = match prepare(device.as_mut(), path, max_height) {
+                    Ok(prepared) => Some(prepared),
+                    Err(e) => {
+                        recover(&mut device, &e);
+                        None
+                    }
+                };
                 commands.recv().ok()
             }
+            Command::Open {
+                generation,
+                path,
+                max_height,
+            } => {
+                let prepared = match ready.take() {
+                    Some(p) if p.path == path && p.max_height == max_height => Ok(p),
+                    _ => prepare(device.as_mut(), path.clone(), max_height),
+                };
+                let mut clip = Clip {
+                    generation,
+                    device: device.as_mut(),
+                    ready: &mut ready,
+                    commands,
+                    frames,
+                    events,
+                };
+                match prepared.and_then(|prepared| clip.play(prepared)) {
+                    Ok(command) => command,
+                    Err(e) => {
+                        let _ = events.send(Event::Failed {
+                            generation,
+                            error: format!("{}: {}", path.display(), e.message()),
+                            codec_missing: e.code() == MF_E_TOPO_CODEC_NOT_FOUND,
+                        });
+                        recover(&mut device, &e);
+                        commands.recv().ok()
+                    }
+                }
+            }
         };
+    }
+}
+
+/// Skips requests to prepare that newer commands have overtaken: only the latest prepare
+/// counts, and an open or stop queued behind it wins.
+fn latest(commands: &Receiver<Command>, mut command: Command) -> Command {
+    while matches!(command, Command::Prepare { .. }) {
+        match commands.try_recv() {
+            Ok(newer) => command = newer,
+            Err(_) => break,
+        }
+    }
+    command
+}
+
+fn device_lost(e: &windows::core::Error) -> bool {
+    e.code() == DXGI_ERROR_DEVICE_REMOVED || e.code() == DXGI_ERROR_DEVICE_RESET
+}
+
+/// A driver update or GPU reset takes the device away; makes a new one for the next clip
+/// rather than failing every clip until a restart.
+fn recover(device: &mut Option<Device>, e: &windows::core::Error) {
+    if device_lost(e) {
+        *device = Device::new().ok();
     }
 }
 
@@ -249,99 +285,217 @@ impl Drop for Device {
     }
 }
 
+/// A clip opened with its first frame decoded and copied back, ready to play at once.
+struct Prepared {
+    path: PathBuf,
+    max_height: Option<u32>,
+    reader: IMFSourceReader,
+    width: u32,
+    height: u32,
+    duration: Duration,
+    /// The first frame's time and pixels.
+    first: (Duration, Vec<u8>),
+}
+
+/// Opens a clip and decodes its first frame. This is most of the wait before a clip shows, so
+/// the player asks for it ahead of time for clips it is likely to play next.
+fn prepare(
+    mut device: Option<&mut Device>,
+    path: PathBuf,
+    max_height: Option<u32>,
+) -> windows::core::Result<Prepared> {
+    let reader = open(device.as_deref(), &path, max_height)?;
+    let (mut width, mut height, duration) = output_format(&reader)?;
+    loop {
+        let (flags, timestamp, sample) = read(&reader)?;
+        if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+            return Err(windows::core::Error::new(
+                MF_E_INVALID_STREAM_DATA,
+                "the clip has no frames",
+            ));
+        }
+        if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
+            (width, height, _) = output_format(&reader)?;
+        }
+        let Some(sample) = sample else { continue };
+        let pixels = pixels(device.as_deref_mut(), &sample, width, height)?;
+        return Ok(Prepared {
+            path,
+            max_height,
+            reader,
+            width,
+            height,
+            duration,
+            first: (presentation_time(timestamp), pixels),
+        });
+    }
+}
+
+/// Reads the next sample: its flags, its time in 100 ns units, and the sample, if any.
+fn read(reader: &IMFSourceReader) -> windows::core::Result<(u32, i64, Option<IMFSample>)> {
+    let mut flags = 0u32;
+    let mut timestamp = 0i64;
+    let mut sample = None;
+    // SAFETY: valid out-pointers for the duration of the call.
+    unsafe {
+        reader.ReadSample(
+            VIDEO,
+            0,
+            None,
+            Some(&mut flags),
+            Some(&mut timestamp),
+            Some(&mut sample),
+        )?;
+    }
+    Ok((flags, timestamp, sample))
+}
+
+fn presentation_time(timestamp: i64) -> Duration {
+    Duration::from_nanos(timestamp.max(0) as u64 * 100)
+}
+
+fn pixels(
+    device: Option<&mut Device>,
+    sample: &IMFSample,
+    width: u32,
+    height: u32,
+) -> windows::core::Result<Vec<u8>> {
+    // SAFETY: the buffer belongs to `sample`, which outlives this call.
+    let buffer = unsafe { sample.GetBufferByIndex(0)? };
+    if let (Some(device), Ok(dxgi)) = (device, buffer.cast::<IMFDXGIBuffer>()) {
+        return device.read_back(&dxgi, width, height);
+    }
+    lock_and_copy(&buffer.cast::<IMF2DBuffer2>()?, width, height)
+}
+
 /// One clip being played.
 struct Clip<'a> {
     generation: u64,
     device: Option<&'a mut Device>,
+    /// Where a clip prepared while this one plays is kept.
+    ready: &'a mut Option<Prepared>,
     commands: &'a Receiver<Command>,
     frames: &'a Sender<Frame>,
     events: &'a Sender<Event>,
 }
 
+/// Why a clip stopped playing.
+enum Ended {
+    /// A command other than a prepare arrived.
+    Command(Command),
+    /// The decoder was dropped.
+    Dropped,
+}
+
 impl Clip<'_> {
-    /// Plays the clip in a loop until a command arrives, and returns that command; `None` when
-    /// the decoder has been dropped.
-    fn play(
-        &mut self,
-        path: &Path,
-        max_height: Option<u32>,
-    ) -> windows::core::Result<Option<Command>> {
-        let reader = open(self.device.as_deref(), path, max_height)?;
-        let (mut width, mut height, duration) = output_format(&reader)?;
+    /// Plays the clip in a loop until a command other than a prepare arrives, and returns that
+    /// command; `None` when the decoder has been dropped.
+    fn play(&mut self, prepared: Prepared) -> windows::core::Result<Option<Command>> {
+        let Prepared {
+            reader,
+            mut width,
+            mut height,
+            duration,
+            first: (pts, bgra),
+            ..
+        } = prepared;
         let _ = self.events.send(Event::Opened {
             generation: self.generation,
             width,
             height,
             duration,
         });
+        let mut frame = Frame {
+            generation: self.generation,
+            pts,
+            width,
+            height,
+            bgra,
+        };
         let mut loop_offset = Duration::ZERO;
         let mut empty_loops = 0;
         loop {
-            if let Ok(command) = self.commands.try_recv() {
-                return Ok(Some(command));
+            match self.send(frame)? {
+                Some(Ended::Command(command)) => return Ok(Some(command)),
+                Some(Ended::Dropped) => return Ok(None),
+                None => {}
             }
-            let mut flags = 0u32;
-            let mut timestamp = 0i64;
-            let mut sample = None;
-            // SAFETY: valid out-pointers for the duration of the call.
-            unsafe {
-                reader.ReadSample(
-                    VIDEO,
-                    0,
-                    None,
-                    Some(&mut flags),
-                    Some(&mut timestamp),
-                    Some(&mut sample),
-                )?;
-            }
-            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
-                empty_loops += 1;
-                if empty_loops > 1 {
-                    // A whole pass without a frame: nothing will ever play.
-                    return Err(windows::core::Error::new(
-                        MF_E_INVALID_STREAM_DATA,
-                        "the clip has no frames",
-                    ));
+            frame = loop {
+                if let Some(command) = self.commands.try_recv().ok()
+                    && let Some(command) = self.answer(command)?
+                {
+                    return Ok(Some(command));
                 }
-                loop_offset += duration;
-                rewind(&reader)?;
-                continue;
-            }
-            if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
-                // A clip can change size partway; frames from here on have the new one.
-                (width, height, _) = output_format(&reader)?;
-            }
-            let Some(sample) = sample else { continue };
-            empty_loops = 0;
-            let pts = loop_offset + Duration::from_nanos(timestamp.max(0) as u64 * 100);
-            let bgra = self.pixels(&sample, width, height)?;
-            let frame = Frame {
-                generation: self.generation,
-                pts,
-                width,
-                height,
-                bgra,
+                let (flags, timestamp, sample) = read(&reader)?;
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    empty_loops += 1;
+                    if empty_loops > 1 {
+                        // A whole pass without a frame: nothing will ever play.
+                        return Err(windows::core::Error::new(
+                            MF_E_INVALID_STREAM_DATA,
+                            "the clip has no frames",
+                        ));
+                    }
+                    loop_offset += duration;
+                    rewind(&reader)?;
+                    continue;
+                }
+                if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
+                    // A clip can change size partway; frames from here on have the new one.
+                    (width, height, _) = output_format(&reader)?;
+                }
+                let Some(sample) = sample else { continue };
+                empty_loops = 0;
+                break Frame {
+                    generation: self.generation,
+                    pts: loop_offset + presentation_time(timestamp),
+                    width,
+                    height,
+                    bgra: pixels(self.device.as_deref_mut(), &sample, width, height)?,
+                };
             };
-            // Wait for the player to take the frame, but answer a new command at once.
-            select! {
-                send(self.frames, frame) -> sent => if sent.is_err() { return Ok(None) },
-                recv(self.commands) -> command => return Ok(command.ok()),
+        }
+    }
+
+    /// Waits for the player to take `frame`, preparing clips meanwhile when asked to. Returns
+    /// why the clip ended, if it did.
+    fn send(&mut self, frame: Frame) -> windows::core::Result<Option<Ended>> {
+        let mut frame = Some(frame);
+        loop {
+            let mut select = Select::new();
+            let send = select.send(self.frames);
+            select.recv(self.commands);
+            let operation = select.select();
+            if operation.index() == send {
+                let frame = frame.take().expect("a frame is sent once");
+                return Ok(operation
+                    .send(self.frames, frame)
+                    .err()
+                    .map(|_| Ended::Dropped));
+            }
+            let Ok(command) = operation.recv(self.commands) else {
+                return Ok(Some(Ended::Dropped));
+            };
+            if let Some(command) = self.answer(command)? {
+                return Ok(Some(Ended::Command(command)));
             }
         }
     }
 
-    fn pixels(
-        &mut self,
-        sample: &IMFSample,
-        width: u32,
-        height: u32,
-    ) -> windows::core::Result<Vec<u8>> {
-        // SAFETY: the buffer belongs to `sample`, which outlives this call.
-        let buffer = unsafe { sample.GetBufferByIndex(0)? };
-        if let (Some(device), Ok(dxgi)) = (self.device.as_mut(), buffer.cast::<IMFDXGIBuffer>()) {
-            return device.read_back(&dxgi, width, height);
-        }
-        lock_and_copy(&buffer.cast::<IMF2DBuffer2>()?, width, height)
+    /// Prepares a clip when asked to, between frames of this one, and hands back any other
+    /// command.
+    fn answer(&mut self, command: Command) -> windows::core::Result<Option<Command>> {
+        let (path, max_height) = match latest(self.commands, command) {
+            Command::Prepare { path, max_height } => (path, max_height),
+            other => return Ok(Some(other)),
+        };
+        *self.ready = match prepare(self.device.as_deref_mut(), path, max_height) {
+            Ok(prepared) => Some(prepared),
+            // The device is gone for the playing clip too; failing it makes a new one.
+            Err(e) if device_lost(&e) => return Err(e),
+            Err(_) => None,
+        };
+        Ok(None)
     }
 }
 
