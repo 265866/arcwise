@@ -23,11 +23,14 @@ on:
       - .github/workflows/build-release.yml
       - Cargo.lock
       - Cargo.toml
+      - LICENSE
       - about.hbs
       - about.toml
       - crates/*/Cargo.toml
+      - crates/arcwise/assets/**
       - crates/arcwise/build.rs
       - installer/**
+      - rust-toolchain.toml
 
 permissions:
   contents: read
@@ -53,7 +56,7 @@ jobs:
           persist-credentials: false
 
       - name: Install the pinned toolchain
-        run: rustup show active-toolchain || rustup toolchain install
+        run: rustup toolchain install
 
       - uses: taiki-e/install-action@v2
         with:
@@ -68,7 +71,15 @@ jobs:
             throw 'arcwise.exe imports VCRUNTIME140.dll, so +crt-static from .cargo/config.toml was not applied.'
           }
 
-      - run: cargo about generate --locked about.hbs -o target\release\THIRD-PARTY-LICENSES.html
+      # A clarification in about.toml that no longer applies, such as a license file whose checksum
+      # changed, is only logged, and a clean run logs nothing. So any output fails the step.
+      - name: Write the license notices
+        shell: bash
+        run: |
+          status=0
+          cargo about generate --locked --fail about.hbs -o target/release/THIRD-PARTY-LICENSES.html 2> "$RUNNER_TEMP/about.log" || status=$?
+          cat "$RUNNER_TEMP/about.log" >&2
+          [ "$status" -eq 0 ] && [ ! -s "$RUNNER_TEMP/about.log" ]
 
       - name: Read the version
         id: version
@@ -82,9 +93,7 @@ jobs:
       - name: Build the installer
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          iscc /Qp "/DAppVersion=$env:VERSION" installer\arcwise.iss
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        run: iscc /Qp "/DAppVersion=$env:VERSION" installer\arcwise.iss
 
       - name: Zip and write checksums
         env:
@@ -94,9 +103,11 @@ jobs:
           Copy-Item target\release\arcwise.exe, target\release\THIRD-PARTY-LICENSES.html $staging
           Copy-Item LICENSE (Join-Path $staging 'LICENSE.txt')
           Compress-Archive -Path "$staging\*" -DestinationPath "dist\arcwise-$env:VERSION-x64.zip"
-          Get-ChildItem dist -File | ForEach-Object {
-            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
-          } | Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          # sha256sum -c rejects lines that end in CR, so join with LF only.
+          $sums = Get-ChildItem dist -File | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)`n"
+          }
+          [IO.File]::WriteAllText("$PWD\dist\SHA256SUMS.txt", -join $sums)
           Get-Content dist\SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v7
