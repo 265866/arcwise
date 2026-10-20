@@ -30,6 +30,8 @@ pub struct Player {
     /// Frames replaced since they were last freed from the window.
     retired: Vec<Arc<RenderImage>>,
     ticking: bool,
+    /// When the clip was asked for, until its first frame shows.
+    opened: Option<Instant>,
 }
 
 impl Player {
@@ -46,6 +48,7 @@ impl Player {
             failed: None,
             retired: Vec::new(),
             ticking: false,
+            opened: None,
         }
     }
 
@@ -57,6 +60,7 @@ impl Player {
         }
         self.reset();
         self.clip = Some(id);
+        self.opened = Some(Instant::now());
         match &self.decoder {
             Err(e) => self.failed = Some(e.clone()),
             Ok(_) if !path.is_file() => {
@@ -87,7 +91,13 @@ impl Player {
         self.duration = None;
         self.paused = false;
         self.failed = None;
+        self.opened = None;
         self.retired.extend(self.shown.take());
+    }
+
+    /// Whether a clip in view is still waiting for its first frame.
+    pub fn waiting(&self) -> bool {
+        self.clip.is_some() && self.shown.is_none() && self.failed.is_none() && !self.hidden
     }
 
     pub fn toggle_pause(&mut self, cx: &mut Context<Self>) {
@@ -221,6 +231,9 @@ impl Render for Player {
             let pull = Self::pull(&self.decoder, self.generation);
             if let Some(image) = self.pacing.advance(now, pull).and_then(image) {
                 self.retired.extend(self.shown.replace(image));
+                if let (Some(opened), Some(clip)) = (self.opened.take(), self.clip) {
+                    crate::trace::task(|| format!("clip {clip}"), opened);
+                }
             }
         }
         if self.clip.is_some() && self.failed.is_none() && !self.pacing.is_held() && !self.ticking {

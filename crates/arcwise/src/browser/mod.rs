@@ -90,7 +90,7 @@ impl Browser {
         // Portraits load while the map is being picked, so the agent step opens with them.
         for agent in this.library.agents() {
             let path = this.library.portrait(&agent.id);
-            this.images.update(cx, |images, cx| images.get(&path, cx));
+            this.images.update(cx, |images, cx| images.fetch(&path, cx));
         }
         this
     }
@@ -115,6 +115,12 @@ impl Browser {
             self.chosen = Some(chosen.clone());
             cx.emit(chosen);
         }
+    }
+
+    /// Whether everything on screen has loaded: no picture is still decoding, and a clip in view
+    /// is showing its frames.
+    pub fn settled(&self, cx: &gpui::App) -> bool {
+        !self.images.read(cx).waiting() && !self.player.read(cx).waiting()
     }
 
     /// Frees every image and frame this screen holds, before it is dropped. Call outside any
@@ -162,7 +168,7 @@ impl Browser {
         );
         self.images.update(cx, |images, cx| {
             for path in &paths {
-                images.get(path, cx);
+                images.fetch(path, cx);
             }
         });
     }
@@ -196,6 +202,7 @@ impl Focusable for Browser {
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
+        self.images.update(cx, |images, _| images.begin());
         let selected = self.browse.selected_lineup();
         self.slide.set(selected.is_some(), now);
         let open = self.slide.at(now);

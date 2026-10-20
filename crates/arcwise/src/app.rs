@@ -2,18 +2,19 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arcwise_core::{Library, Start};
 use gpui::{
-    AsyncApp, ClickEvent, Context, Entity, Focusable, FontWeight, IntoElement, PathPromptOptions,
-    SharedString, WeakEntity, Window, div, prelude::*, px,
+    AsyncApp, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable, FontWeight, IntoElement,
+    MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString, WeakEntity, Window, canvas, div,
+    prelude::*, px,
 };
 
 use crate::args::Args;
 use crate::browser::{Browser, ChangeLibrary, Chosen};
 use crate::settings::{Last, Settings};
-use crate::theme;
-use crate::ui;
+use crate::{theme, trace, ui};
 
 enum Screen {
     /// No library yet, or the last one failed to load.
@@ -78,7 +79,12 @@ impl Arcwise {
         cx.notify();
         let task = cx.background_spawn({
             let path = path.clone();
-            async move { Library::open(path) }
+            async move {
+                let start = Instant::now();
+                let library = Library::open(&path);
+                trace::task(|| "library".into(), start);
+                library
+            }
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
@@ -165,6 +171,41 @@ impl Arcwise {
             )
     }
 
+    /// Ends each frame for [`trace`] with a canvas painted last, which also starts an input at
+    /// every click. Keys start theirs in `main`, before any binding can take them.
+    fn traced(&self, root: Div, start: Instant) -> Div {
+        let browser = match &self.screen {
+            Screen::Browsing(browser) => Some(browser.downgrade()),
+            Screen::Welcome { .. } | Screen::Loading(_) => None,
+        };
+        let loading = matches!(self.screen, Screen::Loading(_));
+        root.child(
+            canvas(
+                |_, _, _| {},
+                move |_, (), window, cx| {
+                    let settled = match browser.as_ref().and_then(|b| b.upgrade()) {
+                        Some(browser) => browser.read(cx).settled(cx),
+                        None => !loading,
+                    };
+                    trace::frame(start, settled);
+                    // Window-wide, so clicks on an occluding dropdown count too.
+                    window.on_mouse_event(|event: &MouseDownEvent, phase, _, _| {
+                        if phase == DispatchPhase::Capture {
+                            trace::input(|| format!("down {:?}", event.position));
+                        }
+                    });
+                    window.on_mouse_event(|event: &MouseUpEvent, phase, _, _| {
+                        if phase == DispatchPhase::Capture {
+                            trace::input(|| format!("up {:?}", event.position));
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .size_0(),
+        )
+    }
+
     fn save_settings(&self) {
         if let Err(e) = self.settings.save() {
             eprintln!("arcwise: could not save settings: {e:#}");
@@ -240,6 +281,7 @@ impl Arcwise {
 
 impl Render for Arcwise {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let start = Instant::now();
         let root = div()
             .size_full()
             .flex()
@@ -248,30 +290,38 @@ impl Render for Arcwise {
             .text_color(theme::text())
             .font_family(theme::FONT)
             .text_size(px(14.));
-        if let Screen::Browsing(browser) = &self.screen {
+        let root = if let Screen::Browsing(browser) = &self.screen {
             if !browser.focus_handle(cx).contains_focused(window, cx) {
                 browser.focus_handle(cx).focus(window, cx);
             }
-            return root.relative().child(browser.clone()).children(
+            root.relative().child(browser.clone()).children(
                 self.notice
                     .clone()
                     .map(|notice| self.notice_banner(notice, cx)),
-            );
-        }
-        let body = match &self.screen {
-            Screen::Welcome { problem } => self.welcome(problem.as_ref(), cx).into_any_element(),
-            Screen::Loading(path) => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(theme::muted())
-                .child(format!("Loading {}…", path.display()))
-                .into_any_element(),
-            Screen::Browsing(_) => unreachable!("rendered above"),
+            )
+        } else {
+            let body = match &self.screen {
+                Screen::Welcome { problem } => {
+                    self.welcome(problem.as_ref(), cx).into_any_element()
+                }
+                Screen::Loading(path) => div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme::muted())
+                    .child(format!("Loading {}…", path.display()))
+                    .into_any_element(),
+                Screen::Browsing(_) => unreachable!("rendered above"),
+            };
+            root.child(ui::bar())
+                .child(div().flex_1().min_h_0().child(body))
         };
-        root.child(ui::bar())
-            .child(div().flex_1().min_h_0().child(body))
+        if trace::enabled() {
+            self.traced(root, start)
+        } else {
+            root
+        }
     }
 }
 

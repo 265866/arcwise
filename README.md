@@ -81,6 +81,14 @@ ARCWISE_LIBRARY=D:\lineups cargo test -p arcwise-core -- --ignored
 ARCWISE_CLIP=D:\lineups\lineups\211.mp4 cargo test -p arcwise-video -- --ignored
 ```
 
+To see where time goes, name a file in `ARCWISE_TRACE`. The app writes a CSV line for every
+frame (how long it took to draw), every key and click (how long until the first frame after
+it, and until nothing on screen is still loading), and every picture or clip it loads:
+
+```sh
+ARCWISE_TRACE=trace.csv cargo run --release
+```
+
 ## License
 
 [MIT](LICENSE).

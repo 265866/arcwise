@@ -11,6 +11,7 @@ mod pacing;
 mod player;
 mod settings;
 mod theme;
+mod trace;
 mod ui;
 
 use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
@@ -19,8 +20,15 @@ use crate::app::Arcwise;
 use crate::args::Args;
 
 fn main() {
+    trace::init();
     let args = Args::parse(std::env::args_os().skip(1));
     gpui_platform::application().run(move |cx: &mut App| {
+        if trace::enabled() {
+            cx.intercept_keystrokes(|event, _, _| {
+                trace::input(|| format!("key {}", event.keystroke.key));
+            })
+            .detach();
+        }
         browser::bind_keys(cx);
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
         cx.open_window(

@@ -54,6 +54,9 @@ pub struct Images {
     silhouette: HashMap<PathBuf, Entry>,
     bytes: usize,
     clock: u64,
+    /// Whether an image asked for with [`Images::get`] since the last [`Images::begin`] is still
+    /// loading.
+    waiting: bool,
 }
 
 impl Images {
@@ -69,7 +72,28 @@ impl Images {
         self.get_as(path, Look::Plain, cx)
     }
 
+    /// Starts drawing a frame: forgets what the last one waited for.
+    pub fn begin(&mut self) {
+        self.waiting = false;
+    }
+
+    /// Whether the frame drawn since [`Images::begin`] shows an image still loading.
+    pub fn waiting(&self) -> bool {
+        self.waiting
+    }
+
+    /// Starts loading the image at `path` for later, without counting it as on screen.
+    pub fn fetch(&mut self, path: &Path, cx: &mut Context<Self>) {
+        self.load(path, Look::Plain, cx);
+    }
+
     pub fn get_as(&mut self, path: &Path, look: Look, cx: &mut Context<Self>) -> Image {
+        let image = self.load(path, look, cx);
+        self.waiting |= matches!(image, Image::Loading);
+        image
+    }
+
+    fn load(&mut self, path: &Path, look: Look, cx: &mut Context<Self>) -> Image {
         self.clock += 1;
         let used = self.clock;
         if let Some(entry) = self.entries(look).get_mut(path) {
@@ -165,6 +189,13 @@ impl Images {
 }
 
 fn decode(path: &Path, look: Look) -> anyhow::Result<Arc<RenderImage>> {
+    let start = std::time::Instant::now();
+    let image = decode_now(path, look);
+    crate::trace::task(|| format!("decode {}", path.display()), start);
+    image
+}
+
+fn decode_now(path: &Path, look: Look) -> anyhow::Result<Arc<RenderImage>> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let mut rgba = if path
         .extension()
