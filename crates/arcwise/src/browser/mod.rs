@@ -17,7 +17,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arcwise_core::{AgentId, Browse, LandingKey, Library, LineupId, MapId, Side, Start, View};
+use arcwise_core::{
+    AgentId, Browse, LandingKey, Library, Lineup, LineupId, MapId, Side, Start, View,
+};
 use gpui::{
     Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Pixels,
     StyleRefinement, Window, div, prelude::*,
@@ -72,6 +74,8 @@ pub struct Browser {
     waiting: bool,
     /// The most rows the viewer shows, from the last render; see [`viewer_rows`].
     rows: u32,
+    /// How many pixels across maps are drawn for the board; see [`map_across`].
+    across: u32,
     /// How far open the panel is, from the last render.
     open: f32,
     /// Where the panel last placed the clip.
@@ -125,6 +129,7 @@ impl Browser {
             parts: None,
             waiting: false,
             rows: viewer_rows_for(crate::WINDOW_WIDTH, 1.),
+            across: map_across_for(crate::WINDOW_WIDTH, crate::WINDOW_HEIGHT, 1.),
             open: 0.,
             clip_slot: Rc::default(),
             throws: Rc::default(),
@@ -205,17 +210,54 @@ impl Browser {
             return;
         }
         let path = self.library.map_image(map, other);
+        let look = Look::Across(self.across);
         self.images
-            .update(cx, |images, cx| images.fetch(&path, Look::Plain, cx));
+            .update(cx, |images, cx| images.fetch(&path, look, cx));
+    }
+
+    /// A map's picture for the board, or one drawn at another size while that one loads.
+    fn map_picture(&self, map: &MapId, side: Side, cx: &mut Context<Self>) -> Image {
+        let path = self.library.map_image(map, side);
+        let look = Look::Across(self.across);
+        let image = self
+            .images
+            .update(cx, |images, cx| images.get_as(&path, look, cx));
+        if !matches!(image, Image::Loading) {
+            return image;
+        }
+        let images = self.images.read(cx);
+        MAP_SIZES
+            .iter()
+            .rev()
+            .find_map(|&across| images.peek(&path, Look::Across(across)))
+            .map_or(image, Image::Ready)
+    }
+
+    /// The part of a lineup's map the viewer's stand view shows: the map at three times the
+    /// viewer's width, around the stand spot.
+    fn stand_window(&self, lineup: &Lineup) -> Look {
+        let (width, height) = (self.rows * 16 / 9, self.rows);
+        let stand = lineup.stand.at();
+        Look::Window {
+            across: (width as f32 * panel::STAND_ZOOM) as u32,
+            x: (stand.x * 100.).round() as u32,
+            y: (stand.y * 100.).round() as u32,
+            width,
+            height,
+        }
     }
 
     /// Fetches the pictures the panel shows for a lineup.
     fn fetch_lineup(&self, id: LineupId, cx: &mut Context<Self>) {
-        let pictures = [
+        let mut pictures = vec![
             (self.library.start_still(id), Look::Plain),
             (self.library.end_still(id), Look::Plain),
             (self.library.aim_image(id), Look::Fit(self.rows)),
         ];
+        if let Some(lineup) = self.library.lineup(id) {
+            let path = self.library.map_image(&lineup.map, lineup.side);
+            pictures.push((path, self.stand_window(lineup)));
+        }
         self.images.update(cx, |images, cx| {
             for (path, look) in &pictures {
                 images.fetch(path, *look, cx);
@@ -302,6 +344,7 @@ impl Render for Browser {
         let now = Instant::now();
         self.images.update(cx, |images, _| images.begin());
         self.rows = viewer_rows(window);
+        self.across = map_across(window);
         let selected = self.browse.selected_lineup();
         self.slide.set(selected.is_some(), now);
         let open = self.slide.at(now);
@@ -490,6 +533,7 @@ fn ahead(browse: &Browse) -> Vec<LineupId> {
 /// next, to decode before it opens.
 pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
     let browse = Browse::new(library, start);
+    let mut maps = Vec::new();
     let mut paths: Vec<PathBuf> = library
         .agents()
         .iter()
@@ -501,9 +545,9 @@ pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
     if let (Some(map), Some(agent)) = (browse.map(), browse.agent()) {
         paths.push(library.map_card(map));
         let side = browse.side();
-        paths.push(library.map_image(map, side));
+        maps.push(library.map_image(map, side));
         if browse.side_count(library, side.other()) > 0 {
-            paths.push(library.map_image(map, side.other()));
+            maps.push(library.map_image(map, side.other()));
         }
         if let Some(agent) = library.agent(agent) {
             paths.extend(agent.abilities.iter().map(|ab| library.ability_icon(ab.id)));
@@ -514,6 +558,8 @@ pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
     }
     let mut pictures: Vec<_> = paths.into_iter().map(|path| (path, Look::Plain)).collect();
     // At the window's first size; a display that scales it decodes them again at its own.
+    let across = map_across_for(crate::WINDOW_WIDTH, crate::WINDOW_HEIGHT, 1.);
+    pictures.extend(maps.into_iter().map(|path| (path, Look::Across(across))));
     let rows = viewer_rows_for(crate::WINDOW_WIDTH, 1.);
     pictures.extend(
         ahead(&browse)
@@ -521,6 +567,29 @@ pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
             .map(|id| (library.aim_image(id), Look::Fit(rows))),
     );
     pictures
+}
+
+/// The sizes maps are drawn at for the board, in pixels across. Steps, so a resize seldom draws
+/// them again.
+const MAP_SIZES: [u32; 3] = [1024, 1536, 2048];
+
+/// The size to draw maps at for the board: the smallest of [`MAP_SIZES`] that fills the largest
+/// square the window could give it.
+fn map_across(window: &Window) -> u32 {
+    let viewport = window.viewport_size();
+    map_across_for(
+        f32::from(viewport.width),
+        f32::from(viewport.height),
+        window.scale_factor(),
+    )
+}
+
+fn map_across_for(width: f32, height: f32, scale: f32) -> u32 {
+    let most = width.min(height) * scale;
+    MAP_SIZES
+        .into_iter()
+        .find(|&across| across as f32 >= most)
+        .unwrap_or(MAP_SIZES[2])
 }
 
 /// `n word`, with an `s` unless `n` is 1.
@@ -551,6 +620,13 @@ fn viewer_rows_for(width: f32, scale: f32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn maps_are_drawn_big_enough_for_the_window() {
+        assert_eq!(super::map_across_for(1440., 900., 1.), 1024);
+        assert_eq!(super::map_across_for(2560., 1440., 1.), 1536);
+        assert_eq!(super::map_across_for(3840., 2160., 1.5), 2048);
+    }
+
     #[test]
     fn plural_adds_an_s() {
         assert_eq!(super::plural(1, "lineup"), "1 lineup");

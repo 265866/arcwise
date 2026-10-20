@@ -159,8 +159,9 @@ impl Browser {
                     let path = self.library.map_image(&map.id, self.browse.side());
                     move |this, hovered: &bool, _, cx| {
                         if *hovered {
+                            let look = Look::Across(this.across);
                             this.images
-                                .update(cx, |images, cx| images.fetch(&path, Look::Plain, cx));
+                                .update(cx, |images, cx| images.fetch(&path, look, cx));
                         }
                     }
                 }))

@@ -16,7 +16,7 @@ use crate::images::{Image, Look};
 use crate::{theme, ui};
 
 /// How far the stand view zooms into the map.
-const STAND_ZOOM: f32 = 3.;
+pub(super) const STAND_ZOOM: f32 = 3.;
 
 impl Browser {
     /// The panel's contents, faded and nudged in as it slides `open`; the browser sets its width.
@@ -194,7 +194,9 @@ impl Browser {
                 ))
                 .child(super::follow::place(self.clip_slot.clone()))
                 .into_any_element(),
-            View::Stand => self.stand_zoom(lineup, color, px(16.), self.stand_view.clone(), cx),
+            View::Stand => {
+                self.stand_zoom(lineup, color, px(16.), self.stand_view.clone(), true, cx)
+            }
             View::Aim => match self.aim(lineup.id, cx) {
                 Image::Missing => missing("This lineup has no aim picture. Follow the clip."),
                 image => picture(image.ready(), false),
@@ -258,11 +260,21 @@ impl Browser {
         color: Hsla,
         dot: Pixels,
         drawn: Rc<Drawn>,
+        zoomed: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let map = self
-            .image(&self.library.map_image(&lineup.map, lineup.side), cx)
-            .ready();
+        let map = self.map_picture(&lineup.map, lineup.side, cx).ready();
+        // The viewer's stand view shows the map three times its width: drawn just around the
+        // stand spot, rather than the whole map that large.
+        let near = zoomed
+            .then(|| {
+                let path = self.library.map_image(&lineup.map, lineup.side);
+                let look = self.stand_window(lineup);
+                self.images
+                    .update(cx, |images, cx| images.get_as(&path, look, cx))
+                    .ready()
+            })
+            .flatten();
         let stand = lineup.stand.at();
         let land = lineup.land.at();
         let throw: Vec<_> = std::iter::once(stand)
@@ -283,7 +295,11 @@ impl Browser {
                     )
                 };
                 window.paint_quad(gpui::fill(bounds, theme::bg()));
-                if let Some(map) = map {
+                if let Some(near) = near {
+                    window
+                        .paint_image(bounds, bounds, Default::default(), near, 0, false)
+                        .ok();
+                } else if let Some(map) = map {
                     let image = Bounds::new(origin, size(side, side));
                     window
                         .paint_image(bounds, image, Default::default(), map, 0, false)
@@ -333,7 +349,7 @@ impl Browser {
                 View::Stand,
                 "W",
                 "1 · Stand",
-                self.stand_zoom(lineup, color, px(9.), self.stand_tile.clone(), cx),
+                self.stand_zoom(lineup, color, px(9.), self.stand_tile.clone(), false, cx),
                 place(lineup.stand.callout.as_deref()).into(),
             ),
             (

@@ -101,7 +101,7 @@ impl Browser {
         ) else {
             return div().into_any_element();
         };
-        let image = self.image(&self.library.map_image(map, self.browse.side()), cx);
+        let image = self.map_picture(map, self.browse.side(), cx);
         // Markers wait for the map and the ability icons, so they never float over an empty
         // square or show as empty rings.
         let icons_ready = agent.abilities.iter().all(|ab| {

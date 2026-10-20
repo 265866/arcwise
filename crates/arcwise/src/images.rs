@@ -76,6 +76,17 @@ pub enum Look {
     /// Shrunk by a whole factor while it keeps at least this many rows, for a picture shown
     /// smaller than it is drawn.
     Fit(u32),
+    /// An SVG drawn this many pixels across.
+    Across(u32),
+    /// A window `width` by `height` pixels onto an SVG drawn `across` pixels across, centered on
+    /// the point `x`, `y` hundredths of a percent of its width and height from its top left.
+    Window {
+        across: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
 }
 
 #[derive(Default)]
@@ -256,7 +267,8 @@ fn decode_now(path: &Path, look: Look) -> anyhow::Result<Arc<RenderImage>> {
     };
     // RenderImage holds BGRA, whatever the buffer's type says; libwebp writes it directly.
     let (mut pixels, bgra) = if is("svg") {
-        let svg = render_svg(&bytes).with_context(|| format!("drawing {}", path.display()))?;
+        let svg =
+            render_svg(&bytes, look).with_context(|| format!("drawing {}", path.display()))?;
         (svg, false)
     } else if is("webp") {
         let webp = decode_webp(&bytes).with_context(|| format!("decoding {}", path.display()))?;
@@ -270,8 +282,8 @@ fn decode_now(path: &Path, look: Look) -> anyhow::Result<Arc<RenderImage>> {
     for px in pixels.pixels_mut() {
         match look {
             Look::Silhouette => px.0[..3].fill(0),
-            Look::Plain | Look::Fit(_) if !bgra => px.0.swap(0, 2),
-            Look::Plain | Look::Fit(_) => {}
+            _ if !bgra => px.0.swap(0, 2),
+            _ => {}
         }
     }
     if let Look::Fit(rows) = look {
@@ -364,18 +376,40 @@ fn decode_webp(bytes: &[u8]) -> anyhow::Result<image::RgbaImage> {
     image::RgbaImage::from_raw(width, height, bgra).context("WebP pixels do not fit its size")
 }
 
-fn render_svg(bytes: &[u8]) -> anyhow::Result<image::RgbaImage> {
+fn render_svg(bytes: &[u8], look: Look) -> anyhow::Result<image::RgbaImage> {
     let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default())?;
     let size = tree.size();
-    let scale = SVG_SIZE as f32 / size.width().max(size.height());
-    let (w, h) = (
-        (size.width() * scale).round() as u32,
-        (size.height() * scale).round() as u32,
-    );
+    let (across, window) = match look {
+        Look::Across(across) => (across, None),
+        Look::Window {
+            across,
+            x,
+            y,
+            width,
+            height,
+        } => (across, Some((x, y, width, height))),
+        Look::Plain | Look::Silhouette | Look::Fit(_) => (SVG_SIZE, None),
+    };
+    let scale = across as f32 / size.width().max(size.height());
+    let (w, h, dx, dy) = match window {
+        None => (
+            (size.width() * scale).round() as u32,
+            (size.height() * scale).round() as u32,
+            0.,
+            0.,
+        ),
+        // The point moves to the window's center.
+        Some((x, y, width, height)) => (
+            width,
+            height,
+            width as f32 / 2. - size.width() * scale * x as f32 / 10_000.,
+            height as f32 / 2. - size.height() * scale * y as f32 / 10_000.,
+        ),
+    };
     let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).context("SVG has no size")?;
     resvg::render(
         &tree,
-        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        resvg::tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy),
         &mut pixmap.as_mut(),
     );
     // tiny-skia stores premultiplied alpha; GPUI expects straight alpha.
@@ -401,7 +435,7 @@ mod tests {
             <rect x="0" y="0" width="50" height="100" fill="#ff0000"/>
             <rect x="50" y="0" width="50" height="100" fill="#0000ff" fill-opacity="0.5"/>
         </svg>"##;
-        let image = render_svg(svg).unwrap();
+        let image = render_svg(svg, Look::Plain).unwrap();
         assert_eq!(image.dimensions(), (SVG_SIZE, SVG_SIZE));
         assert_eq!(image.get_pixel(10, 10).0, [255, 0, 0, 255]);
         let half = image.get_pixel(SVG_SIZE - 10, 10).0;
@@ -410,6 +444,31 @@ mod tests {
             half[2] >= 254,
             "straight alpha, not premultiplied: {half:?}"
         );
+    }
+
+    #[test]
+    fn draws_an_svg_across_a_size_or_a_window_onto_it() {
+        // Red left half, blue right half.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect x="0" y="0" width="50" height="100" fill="#ff0000"/>
+            <rect x="50" y="0" width="50" height="100" fill="#0000ff"/>
+        </svg>"##;
+        assert_eq!(
+            render_svg(svg, Look::Across(300)).unwrap().dimensions(),
+            (300, 300)
+        );
+        // Drawn 1000 across, a 40x20 window centered at (49%, 50%): the halves meet at x = 30.
+        let window = Look::Window {
+            across: 1000,
+            x: 4900,
+            y: 5000,
+            width: 40,
+            height: 20,
+        };
+        let image = render_svg(svg, window).unwrap();
+        assert_eq!(image.dimensions(), (40, 20));
+        assert_eq!(image.get_pixel(25, 10).0, [255, 0, 0, 255]);
+        assert_eq!(image.get_pixel(35, 10).0, [0, 0, 255, 255]);
     }
 
     #[test]
