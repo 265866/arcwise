@@ -1,0 +1,35 @@
+# Checked in CI by `cargo deny check`. Arcwise ships only for Windows, so only that target's
+# dependency graph is checked.
+[graph]
+targets = ["x86_64-pc-windows-msvc"]
+all-features = true
+
+# Vulnerabilities fail anywhere in the graph. Unmaintained crates fail only when Arcwise depends
+# on them directly: the ones GPUI pulls in can only be replaced upstream.
+[advisories]
+unmaintained = "workspace"
+ignore = []
+
+# Release builds must ship every dependency's license notice, so only licenses that allow
+# bundling a notice are accepted.
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/zed-industries/zed",
+    "https://github.com/zed-industries/async-task.git",
+]
