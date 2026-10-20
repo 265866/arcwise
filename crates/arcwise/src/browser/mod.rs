@@ -65,8 +65,8 @@ pub struct Browser {
     prefetched: Option<(Option<LandingKey>, LandingKey, LandingKey, u32)>,
     /// The map, side and map size whose other side was last fetched ahead.
     prefetched_map: Option<(MapId, Side, u32)>,
-    /// The lineup whose clip was last readied ahead, with the lineup shown and the viewer's rows
-    /// then.
+    /// The lineup whose clip was last readied ahead, with the last lineup shown and the viewer's
+    /// rows then.
     prepared: Option<(LineupId, Option<LineupId>, u32)>,
     /// The choice last emitted as [`Chosen`].
     chosen: Option<Chosen>,
@@ -306,9 +306,13 @@ impl Browser {
             .or_else(next)
             .filter(|&id| Some(id) != self.shown);
         let Some(id) = target else { return };
-        // The decoder lets a prepared clip go when another opens, so ask again after one does.
+        // The decoder lets a prepared clip go when another opens, so ask again after one does;
+        // closing the panel only stops the clip, which keeps it.
         let rows = viewer_rows(window);
-        let key = (id, self.shown, rows);
+        let opened = self
+            .shown
+            .or(self.prepared.and_then(|(_, opened, _)| opened));
+        let key = (id, opened, rows);
         if self.prepared == Some(key) {
             return;
         }
