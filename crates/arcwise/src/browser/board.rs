@@ -212,6 +212,7 @@ impl Browser {
             })
             .ready();
         let key = landing.key;
+        let first = landing.lineups[0];
         let count = landing.lineups.len();
         let slot = px(MARKER * 1.25);
         let group = format!("landing-{}-{}", key.ability.0, key.first.0);
@@ -227,6 +228,10 @@ impl Browser {
             .justify_center()
             .cursor_pointer()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                // Pointing at a landing starts loading what its panel shows.
+                if *hovered {
+                    this.fetch_lineup(first, cx);
+                }
                 let hovered = hovered.then_some(key);
                 if this.hovered != hovered {
                     this.hovered = hovered.or(this.hovered.filter(|k| *k != key));

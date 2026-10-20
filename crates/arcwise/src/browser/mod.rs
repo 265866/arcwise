@@ -55,8 +55,8 @@ pub struct Browser {
     slide: Slide,
     /// The lineup in the panel: the selected one, or the last one while the panel slides away.
     shown: Option<LineupId>,
-    /// The landing whose neighbours' stills were last fetched ahead.
-    prefetched: Option<LandingKey>,
+    /// The selected landing, and the first of those shown, when pictures were last fetched ahead.
+    prefetched: Option<(Option<LandingKey>, LandingKey)>,
     /// The map and side whose other side was last fetched ahead.
     prefetched_map: Option<(MapId, Side)>,
     /// The lineup whose clip was last readied ahead.
@@ -165,47 +165,51 @@ impl Browser {
         self.images.update(cx, |images, cx| images.fetch(&path, cx));
     }
 
-    /// Fetches the pictures the keys can reach next: every stand spot of the selected landing,
-    /// and the first of the landings either side, so stepping through them shows them at once.
-    fn prefetch(&mut self, cx: &mut Context<Self>) {
-        let landings = self.browse.landings();
-        let Some(at) = self
-            .browse
-            .selected_landing()
-            .and_then(|g| landings.iter().position(|l| l.key == g.key))
-        else {
-            return;
-        };
-        if self.prefetched == Some(landings[at].key) {
-            return;
-        }
-        self.prefetched = Some(landings[at].key);
-        let n = landings.len();
-        let ids: Vec<LineupId> = landings[at]
-            .lineups
-            .iter()
-            .copied()
-            .chain([
-                landings[(at + 1) % n].lineups[0],
-                landings[(at + n - 1) % n].lineups[0],
-            ])
-            .collect();
-        let mut paths: Vec<PathBuf> = ids
-            .into_iter()
-            .flat_map(|id| [self.library.start_still(id), self.library.end_still(id)])
-            .collect();
-        // Aim pictures are large; only those of the landing on screen.
-        paths.extend(
-            landings[at]
-                .lineups
-                .iter()
-                .map(|&id| self.library.aim_image(id)),
-        );
+    /// Fetches the pictures the panel shows for a lineup.
+    fn fetch_lineup(&self, id: LineupId, cx: &mut Context<Self>) {
+        let paths = [
+            self.library.start_still(id),
+            self.library.end_still(id),
+            self.library.aim_image(id),
+        ];
         self.images.update(cx, |images, cx| {
             for path in &paths {
                 images.fetch(path, cx);
             }
         });
+    }
+
+    /// Fetches the pictures the keys can reach next, so stepping to them shows them at once:
+    /// every stand spot of the selected landing and the first of the landings either side, or
+    /// with nothing selected, the first and last landings.
+    fn prefetch(&mut self, cx: &mut Context<Self>) {
+        let landings = self.browse.landings();
+        let Some(first) = landings.first() else {
+            return;
+        };
+        let selected = self.browse.selected_landing().map(|g| g.key);
+        let key = (selected, first.key);
+        if self.prefetched == Some(key) {
+            return;
+        }
+        self.prefetched = Some(key);
+        let n = landings.len();
+        let ids: Vec<LineupId> =
+            match selected.and_then(|key| landings.iter().position(|l| l.key == key)) {
+                Some(at) => landings[at]
+                    .lineups
+                    .iter()
+                    .copied()
+                    .chain([
+                        landings[(at + 1) % n].lineups[0],
+                        landings[(at + n - 1) % n].lineups[0],
+                    ])
+                    .collect(),
+                None => vec![first.lineups[0], landings[n - 1].lineups[0]],
+            };
+        for id in ids {
+            self.fetch_lineup(id, cx);
+        }
     }
 
     /// Readies the clip most likely to play next: a stand spot or landing under the pointer, or
