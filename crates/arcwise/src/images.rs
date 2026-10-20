@@ -308,9 +308,39 @@ fn shrink(image: image::RgbaImage, factor: u32) -> image::RgbaImage {
     image::RgbaImage::from_raw(width, height, out).expect("the buffer fits the size")
 }
 
+/// Has libwebp fill in its tables of decoding functions, once, before any decode. It fills them
+/// on first use, without a lock on Windows, and pictures decoded at once on several threads at
+/// launch could catch a table half filled and loop forever. Decoding a tiny picture of each kind
+/// here, on one thread, fills them all.
+fn set_up_libwebp() {
+    static SET_UP: std::sync::Once = std::sync::Once::new();
+    SET_UP.call_once(|| {
+        // Lossy, lossy with alpha (whose alpha is lossless), and lossless.
+        for (lossless, alpha) in [(false, 255u8), (false, 128), (true, 255)] {
+            let rgba = [200u8, 100, 50, alpha].repeat(4);
+            let mut encoded = std::ptr::null_mut();
+            let mut bgra = [0u8; 16];
+            // SAFETY: `rgba` holds 2x2 pixels at a stride of 8 bytes, and `bgra` room for as
+            // many; libwebp reads at most the `len` bytes it encoded, then frees them.
+            unsafe {
+                let len = if lossless {
+                    libwebp_sys::WebPEncodeLosslessRGBA(rgba.as_ptr(), 2, 2, 8, &mut encoded)
+                } else {
+                    libwebp_sys::WebPEncodeRGBA(rgba.as_ptr(), 2, 2, 8, 90., &mut encoded)
+                };
+                if len > 0 {
+                    libwebp_sys::WebPDecodeBGRAInto(encoded, len, bgra.as_mut_ptr(), 16, 8);
+                }
+                libwebp_sys::WebPFree(encoded.cast());
+            }
+        }
+    });
+}
+
 /// Decodes a WebP picture to BGRA with libwebp, three times faster than the `image` crate's
 /// decoder for the library's stills.
 fn decode_webp(bytes: &[u8]) -> anyhow::Result<image::RgbaImage> {
+    set_up_libwebp();
     let (mut width, mut height) = (0, 0);
     // SAFETY: libwebp reads at most `bytes.len()` bytes and writes only the two sizes.
     let known =

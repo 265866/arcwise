@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use arcwise_core::{Library, LoadError, Start};
@@ -80,13 +80,19 @@ impl Arcwise {
         let load = self.begin_load(path, cx);
         match preload.recv_timeout(PRELOAD_WAIT) {
             Ok(opened) => self.opened(load, opened, cx),
-            Err(_) => {
+            // The thread reading it is gone without an answer; read it here instead.
+            Err(RecvTimeoutError::Disconnected) => self.load(path.to_owned(), cx),
+            Err(RecvTimeoutError::Timeout) => {
+                let path = path.to_owned();
                 let task = cx.background_spawn(async move { preload.recv().ok() });
                 cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                    if let Some(opened) = task.await {
-                        this.update(cx, |this, cx| this.opened(load, opened, cx))
-                            .ok();
-                    }
+                    let opened = task.await;
+                    this.update(cx, |this, cx| match opened {
+                        Some(opened) => this.opened(load, opened, cx),
+                        None if this.loads == load => this.load(path, cx),
+                        None => {}
+                    })
+                    .ok();
                 })
                 .detach();
             }
