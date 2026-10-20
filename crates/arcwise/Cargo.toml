@@ -14,7 +14,8 @@ arcwise-core.workspace = true
 arcwise-video.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
-image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+libwebp-sys = "0.14"
 resvg = { version = "0.46", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
