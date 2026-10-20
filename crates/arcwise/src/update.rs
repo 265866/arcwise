@@ -1,14 +1,12 @@
-//! Keeps Arcwise up to date. When an installed Arcwise opens, it asks GitHub for the latest
-//! release, downloads a newer installer, and checks the installer's attestation: that this
-//! repository's release workflow built it on GitHub's own runners. The installer then runs
-//! silently when Arcwise closes, or straight away when asked to restart.
+//! Finds, downloads and checks updates. [`latest`] asks GitHub for the latest release. [`fetch`]
+//! downloads a release's installer and checks its attestation: that this repository's release
+//! workflow built it on GitHub's own runners. [`crate::updater`] decides when each runs.
 
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as _, bail, ensure};
@@ -26,6 +24,8 @@ const LATEST_RELEASE: &str = "https://api.github.com/repos/265866/arcwise/releas
 const DOWNLOADS: &str = "https://github.com/265866/arcwise/releases/download";
 /// The release workflow attaches it to every release.
 const ATTESTATION: &str = "attestation.json";
+/// How long a downloaded installer for a newer version is kept for another Arcwise to install.
+const KEEP_DOWNLOADS: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Who must have built an installer for Arcwise to run it.
 pub struct Builder {
@@ -45,17 +45,6 @@ pub const RELEASE_BUILDER: Builder = Builder {
 };
 
 const GITHUB_ACTIONS: &str = "https://token.actions.githubusercontent.com";
-
-static ENABLED: AtomicBool = AtomicBool::new(true);
-
-/// Whether Arcwise looks for updates when it opens, and installs one it found when it closes.
-pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
-}
-
-pub fn set_enabled(on: bool) {
-    ENABLED.store(on, Ordering::Relaxed);
-}
 
 pub fn current_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("the package version is semver")
@@ -81,12 +70,9 @@ pub struct Update {
 
 #[derive(Debug)]
 pub enum Outcome {
-    UpToDate,
     Ready(Update),
-    /// A newer release exists, but its installer could not be shown to come from the release
-    /// workflow, so it was deleted.
+    /// The installer could not be shown to come from the release workflow, so it was deleted.
     Unverified {
-        version: Version,
         reason: String,
     },
 }
@@ -96,31 +82,30 @@ pub fn directory() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|dir| Path::new(&dir).join("Arcwise").join("updates"))
 }
 
-/// Looks for a release newer than `current` and downloads its installer into `dir`. Blocks on
-/// the network, so it runs off the UI thread. An error means the check could not finish, such as
-/// when offline or while a release is still getting its files, and is not worth showing.
-pub fn check(current: &Version, dir: &Path) -> anyhow::Result<Outcome> {
-    let agent = agent(current);
-    let latest: Release = match agent.get(LATEST_RELEASE).call() {
+/// Asks GitHub for the latest release and returns its version when it is newer than `current`.
+/// Installers left in `dir` by earlier runs, such as one already installed, are deleted. Blocks
+/// on the network, so it runs off the UI thread.
+pub fn latest(current: &Version, dir: &Path) -> anyhow::Result<Option<Version>> {
+    let release: Release = match agent(current).get(LATEST_RELEASE).call() {
         Ok(mut response) => serde_json::from_slice(&response.body_mut().read_to_vec()?)
             .context("reading the latest release")?,
         // No release has been published yet.
-        Err(ureq::Error::StatusCode(404)) => return Ok(Outcome::UpToDate),
+        Err(ureq::Error::StatusCode(404)) => return Ok(None),
         Err(e) => return Err(e).context("asking GitHub for the latest release"),
     };
-    // Installers from earlier checks, such as one already installed, are no longer needed.
-    clear(dir);
-    let Some(version) = newer(current, &latest) else {
-        return Ok(Outcome::UpToDate);
-    };
-    let name = installer_name(&version);
+    clear(dir, current);
+    Ok(newer(current, &release))
+}
+
+/// Downloads `version`'s installer into `dir` and checks its attestation. Blocks on the network,
+/// so it runs off the UI thread. An error means the download could not finish, such as when
+/// offline or while the release is still getting its files.
+pub fn fetch(version: &Version, dir: &Path) -> anyhow::Result<Outcome> {
+    let agent = agent(&current_version());
+    let name = installer_name(version);
     let url = |file: &str| format!("{DOWNLOADS}/v{version}/{file}");
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    // Named for this process, so a second Arcwise checking at the same time has its own file.
-    let installer = dir.join(format!(
-        "arcwise-{version}-{}-setup.exe",
-        std::process::id()
-    ));
+    let installer = dir.join(download_name(version, std::process::id()));
     let checked = (|| {
         download(&agent, &url(&name), &installer)?;
         let attestation = agent
@@ -137,9 +122,11 @@ pub fn check(current: &Version, dir: &Path) -> anyhow::Result<Outcome> {
         let _ = std::fs::remove_file(&installer);
     }
     match checked? {
-        Ok(()) => Ok(Outcome::Ready(Update { version, installer })),
+        Ok(()) => Ok(Outcome::Ready(Update {
+            version: version.clone(),
+            installer,
+        })),
         Err(e) => Ok(Outcome::Unverified {
-            version,
             reason: format!("{e:#}"),
         }),
     }
@@ -176,6 +163,18 @@ fn newer(current: &Version, release: &Release) -> Option<Version> {
 /// The installer's name in the release, which its attestation names too.
 fn installer_name(version: &Version) -> String {
     format!("arcwise-{version}-x64-setup.exe")
+}
+
+/// The name [`fetch`] saves `version`'s installer under, for process `pid`, so a second Arcwise
+/// downloading at the same time has its own file.
+fn download_name(version: &Version, pid: u32) -> String {
+    format!("arcwise-{version}-{pid}-setup.exe")
+}
+
+/// The version in a name from [`download_name`].
+fn downloaded_version(name: &str) -> Option<Version> {
+    let rest = name.strip_prefix("arcwise-")?.strip_suffix("-setup.exe")?;
+    Version::parse(rest.rsplit_once('-')?.0).ok()
 }
 
 /// Checks that `attestation` shows `builder` built the file named `file_name` whose SHA-256 is
@@ -252,13 +251,26 @@ fn download(agent: &ureq::Agent, url: &str, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Deletes every file in `dir`.
-fn clear(dir: &Path) {
+/// Deletes the files in `dir` except installers newer than `current` from the last
+/// [`KEEP_DOWNLOADS`], which another Arcwise running at the same time may be downloading or
+/// about to install. Ones downloaded earlier are left by installs that never finished.
+fn clear(dir: &Path, current: &Version) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        let _ = std::fs::remove_file(entry.path());
+        let newer = entry
+            .file_name()
+            .to_str()
+            .and_then(downloaded_version)
+            .is_some_and(|version| version > *current);
+        let recent = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age < KEEP_DOWNLOADS));
+        if !(newer && recent) {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
@@ -392,15 +404,39 @@ mod tests {
     }
 
     #[test]
-    fn clears_every_file() {
+    fn clears_all_but_recent_installers_newer_than_the_running_version() {
         let dir = std::env::temp_dir().join(format!("arcwise-update-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["arcwise-0.2.0-1-setup.exe", "arcwise-0.3.0-2-setup.exe"] {
+        let version = |v: &str| Version::parse(v).unwrap();
+        let older = download_name(&version("0.1.0"), 1);
+        let running = download_name(&version("0.2.0"), 2);
+        let newer = download_name(&version("0.3.0"), 3);
+        let prerelease = download_name(&version("0.4.0-rc.1"), 4);
+        let abandoned = download_name(&version("0.3.0"), 5);
+        for name in [
+            &older,
+            &running,
+            &newer,
+            &prerelease,
+            &abandoned,
+            "notes.txt",
+        ] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
-        clear(&dir);
-        let left = std::fs::read_dir(&dir).unwrap().count();
+        let two_days_ago = std::time::SystemTime::now() - 2 * KEEP_DOWNLOADS;
+        File::options()
+            .write(true)
+            .open(dir.join(&abandoned))
+            .unwrap()
+            .set_modified(two_days_ago)
+            .unwrap();
+        clear(&dir, &version("0.2.0"));
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(left, 0);
+        assert_eq!(left, [newer, prerelease]);
     }
 }

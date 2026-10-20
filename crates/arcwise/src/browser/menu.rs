@@ -8,38 +8,86 @@ use gpui::{
 
 use super::{Browser, ChangeLibrary, SetAutoUpdate, SetBlur, SetBlurStrength};
 use crate::settings::Settings;
-use crate::{theme, ui, update};
+use crate::updater::State;
+use crate::{theme, ui};
 
-/// A cog: teeth from a dashed ring, around a ring for the body.
-const GEAR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#000" stroke-width="3.5" stroke-dasharray="3.534 3.534"/><circle cx="12" cy="12" r="6" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
+/// A ring around an arrow pointing up, on the gear while an update waits to be installed.
+const UPDATE_BADGE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5" fill="none" stroke="#000" stroke-width="2.5"/><path d="M12 17V7.5M8 11.5l4-4 4 4" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+
+/// The gear button's fill and border, notched where [`UPDATE_BADGE`] sits on its corner so the
+/// badge shows what is behind it rather than a line through it.
+const NOTCHED_FILL: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 42 42"><defs><mask id="m"><rect width="42" height="42" fill="#fff"/><circle cx="39" cy="3" r="9.5" fill="#000"/></mask></defs><rect width="42" height="42" rx="10.5" mask="url(#m)"/></svg>"##;
+const NOTCHED_BORDER: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 42 42"><defs><mask id="m"><rect width="42" height="42" fill="#fff"/><circle cx="39" cy="3" r="9.5" fill="#000"/></mask></defs><rect x="0.5" y="0.5" width="41" height="41" rx="10" fill="none" stroke="#000" stroke-width="1" mask="url(#m)"/></svg>"##;
+
+/// An arrow down onto a line, on the button that installs an update.
+const DOWNLOAD: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+
+/// The app icon's arc and diamond without its square, as two masks to tint apart.
+const LOGO_ARC: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="35 53 200 200"><path d="M50 206 Q 104 30 182 146" fill="none" stroke="#000" stroke-width="20" stroke-linecap="round"/></svg>"##;
+const LOGO_DIAMOND: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="35 53 200 200"><rect x="170" y="150" width="50" height="50" rx="6" transform="rotate(45 195 175)"/></svg>"##;
 
 /// The strength slider's knob, which hangs half its width past each end of the track.
 const KNOB: Pixels = px(14.);
 
 impl Browser {
-    /// The gear that opens and closes the menu, with the menu under it while open.
+    /// The gear that opens and closes the menu, with the menu under it while open, and a badge
+    /// while an update waits to be installed.
     pub(super) fn menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let open = self.menu_open;
+        let waiting = self.updater.read(cx).waiting();
         div()
             .id("settings")
+            .group("settings")
             .relative()
             .flex()
             .items_center()
             .justify_center()
             .size(px(42.))
-            .rounded(px(10.))
-            .border_1()
-            .border_color(theme::line())
             .cursor_pointer()
-            .hover(|s| s.bg(theme::raised()).border_color(theme::line_hover()))
-            .when(open, |d| {
-                d.bg(theme::raised()).border_color(theme::line_hover())
+            .map(|d| {
+                if waiting {
+                    let (fill, border) = if open {
+                        (theme::raised().into(), theme::line_hover())
+                    } else {
+                        (gpui::transparent_black(), theme::line())
+                    };
+                    d.child(
+                        layer(NOTCHED_FILL)
+                            .text_color(fill)
+                            .group_hover("settings", |s| s.text_color(theme::raised())),
+                    )
+                    .child(
+                        layer(NOTCHED_BORDER)
+                            .text_color(border)
+                            .group_hover("settings", |s| s.text_color(theme::line_hover())),
+                    )
+                } else {
+                    d.rounded(px(10.5))
+                        .border_1()
+                        .border_color(theme::line())
+                        .hover(|s| s.bg(theme::raised()).border_color(theme::line_hover()))
+                        .when(open, |d| {
+                            d.bg(theme::raised()).border_color(theme::line_hover())
+                        })
+                }
             })
-            .child(svg().data(GEAR).size(px(18.)).text_color(if open {
+            .child(svg().data(ui::GEAR).size(px(18.)).text_color(if open {
                 theme::text()
             } else {
                 theme::muted()
             }))
+            // Over the corner, with the right tip of its arrowhead on the border.
+            .when(waiting, |d| {
+                d.child(
+                    svg()
+                        .data(UPDATE_BADGE)
+                        .absolute()
+                        .top(px(-4.))
+                        .right(px(-4.))
+                        .size(px(14.))
+                        .text_color(gpui::white()),
+                )
+            })
             .children(open.then(|| {
                 div()
                     .absolute()
@@ -58,15 +106,22 @@ impl Browser {
                 cx.listener(|this, _, _, cx| {
                     if this.menu_open {
                         this.menu_open = false;
+                        cx.notify();
                     } else {
-                        // A chooser that cannot close yet, such as the agent's after a map with
-                        // no lineups for them, keeps the menu shut until a choice is made.
-                        this.browse.dismiss_chooser(&this.library);
-                        this.menu_open = this.browse.chooser().is_none();
+                        this.open_menu(cx);
                     }
-                    cx.notify();
                 }),
             )
+    }
+
+    /// Opens the settings menu, unless a chooser that cannot close yet, such as the agent's after
+    /// a map with no lineups for them, keeps it shut until a choice is made. Returns whether it
+    /// opened.
+    pub fn open_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        self.browse.dismiss_chooser(&self.library);
+        self.menu_open = self.browse.chooser().is_none();
+        cx.notify();
+        self.menu_open
     }
 
     fn menu(&self, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -76,6 +131,7 @@ impl Browser {
             |n| n.to_string_lossy().into_owned(),
         );
         let blur = theme::blur();
+        let automatic = self.updater.read(cx).automatic();
         div()
             .id("menu")
             .w(px(340.))
@@ -118,7 +174,7 @@ impl Browser {
                         )),
                     ),
             )
-            .child(div().h(px(1.)).mx(px(10.)).bg(theme::line()))
+            .child(divider())
             .child(
                 row()
                     .id("blur")
@@ -127,21 +183,10 @@ impl Browser {
                     .child(
                         div()
                             .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Background blur"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(theme::faint())
-                                    .child("Show what is behind the window, blurred"),
-                            ),
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Background blur"),
                     )
+                    .children(self.reset_blur(cx))
                     .child(switch(blur))
                     .on_click(cx.listener(|_, _, window, cx| {
                         let on = !theme::blur();
@@ -153,6 +198,7 @@ impl Browser {
                     })),
             )
             .when(blur, |menu| menu.child(self.strength_row(cx)))
+            .child(divider())
             .child(
                 row()
                     .id("auto-update")
@@ -161,70 +207,115 @@ impl Browser {
                     .child(
                         div()
                             .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Automatic updates"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(theme::faint())
-                                    .child("Check for a new version when Arcwise opens"),
-                            ),
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Automatic updates"),
                     )
-                    .child(switch(update::enabled()))
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        let on = !update::enabled();
-                        update::set_enabled(on);
+                    .child(switch(automatic))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let on = !this.updater.read(cx).automatic();
+                        this.updater
+                            .update(cx, |updater, cx| updater.set_automatic(on, cx));
                         cx.emit(SetAutoUpdate(on));
-                        cx.notify();
                     })),
             )
-            .child(div().h(px(1.)).mx(px(10.)).bg(theme::line()))
-            .child(
-                row()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme::faint())
-                            .child(concat!("Arcwise ", env!("CARGO_PKG_VERSION"))),
-                    )
-                    .child(self.reset_button(cx)),
-            )
+            .child(divider())
+            .child(self.version(cx))
     }
 
-    /// Puts every setting but the library back as it first was. Dimmed while they already are.
-    fn reset_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// Puts background blur and its strength back as they first were. Shown only while either
+    /// differs.
+    fn reset_blur(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let defaults = Settings::default();
-        let changed = theme::blur() != defaults.blur
-            || theme::strength() != defaults.blur_strength
-            || update::enabled() != defaults.auto_update;
-        if !changed {
-            return ui::idle_button("reset-settings", "Reset to defaults");
+        if theme::blur() == defaults.blur && theme::strength() == defaults.blur_strength {
+            return None;
         }
-        ui::button("reset-settings", "Reset to defaults").on_click(cx.listener(
-            move |_, _, window, cx| {
+        let reset = div()
+            .id("reset-blur")
+            // As tall as the switch beside it, so the row keeps its height when this shows.
+            .h(px(22.))
+            .flex()
+            .items_center()
+            .px(px(8.))
+            .rounded(px(6.))
+            .text_size(px(12.))
+            .text_color(theme::muted())
+            .cursor_pointer()
+            .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+            .child("Reset")
+            .on_click(cx.listener(move |_, _, window, cx| {
+                // The row around it turns blur on or off when clicked.
+                cx.stop_propagation();
                 theme::set_blur(defaults.blur);
                 theme::set_strength(defaults.blur_strength);
-                update::set_enabled(defaults.auto_update);
                 window.set_background_appearance(theme::window_background());
                 window.refresh();
                 cx.emit(SetBlur(defaults.blur));
                 cx.emit(SetBlurStrength(defaults.blur_strength));
-                cx.emit(SetAutoUpdate(defaults.auto_update));
-            },
-        ))
+            }));
+        Some(reset)
     }
 
-    /// How much of the blur shows: a track to click or drag along, which changes the window as
-    /// it moves and is saved when let go.
+    /// The logo and the version running, with a button that updates to a newer one and relaunches.
+    fn version(&self, cx: &mut Context<Self>) -> Div {
+        let (newer, downloading) = match self.updater.read(cx).state() {
+            State::UpToDate => (None, false),
+            State::Available(version) => (Some(version.clone()), false),
+            State::Downloading { version, .. } => (Some(version.clone()), true),
+            State::Ready(update) => (Some(update.version.clone()), false),
+        };
+        row()
+            .gap(px(10.))
+            .py(px(6.))
+            .child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .size(px(20.))
+                    .child(layer(LOGO_ARC).text_color(theme::text()))
+                    .child(layer(LOGO_DIAMOND).text_color(theme::accent())),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(13.))
+                    .text_color(theme::muted())
+                    .child(concat!("Arcwise ", env!("CARGO_PKG_VERSION"))),
+            )
+            .children(newer.map(|version| {
+                let tip = ui::tip(format!("Update to {version} and relaunch"));
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::faint())
+                            .child(format!("{version} available")),
+                    )
+                    .child(
+                        if downloading {
+                            // Clicked mid-download, it installs once the download is verified.
+                            ui::icon_frame("update-now", px(30.))
+                                .cursor_pointer()
+                                .child(ui::spinner(px(14.)))
+                        } else {
+                            ui::icon_button("update-now", DOWNLOAD, px(30.), theme::text())
+                        }
+                        .tooltip(tip)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.updater
+                                .update(cx, |updater, cx| updater.install_now(cx));
+                        })),
+                    )
+            }))
+    }
+
+    /// How much of the blur shows, from 0 to 100: a track to click or drag along, which changes
+    /// the window as it moves and is saved when let go.
     fn strength_row(&self, cx: &mut Context<Self>) -> Div {
         let strength = theme::strength();
+        let along = f32::from(strength) / 100.;
         let browser = cx.entity().downgrade();
         let bar = |d: Div| d.absolute().left_0().top(px(9.)).h(px(4.)).rounded_full();
         row()
@@ -241,12 +332,12 @@ impl Browser {
                     .h(px(22.))
                     .cursor_pointer()
                     .child(bar(div()).right_0().bg(theme::raised()))
-                    .child(bar(div()).w(gpui::relative(strength)).bg(theme::accent()))
+                    .child(bar(div()).w(gpui::relative(along)).bg(theme::accent()))
                     .child(
                         div()
                             .absolute()
                             .top(px(4.))
-                            .left(gpui::relative(strength))
+                            .left(gpui::relative(along))
                             .ml(-KNOB / 2.)
                             .size(KNOB)
                             .rounded_full()
@@ -264,19 +355,19 @@ impl Browser {
                     ),
             )
             .child(
-                ui::num(format!("{:.0}%", strength * 100.))
+                ui::num(format!("{strength}%"))
                     .w(px(34.))
                     .flex()
                     .justify_end(),
             )
     }
 
-    fn set_strength(&mut self, strength: f32, window: &mut Window) {
-        if strength.is_nan() {
+    /// Sets the strength from a point `along` the track, 0 at its left end and 1 at its right.
+    fn set_strength(&mut self, along: f32, window: &mut Window) {
+        if along.is_nan() {
             return;
         }
-        // Whole percents, as the slider shows.
-        let strength = (strength.clamp(0., 1.) * 100.).round() / 100.;
+        let strength = (along.clamp(0., 1.) * 100.).round() as u8;
         if strength != theme::strength() {
             theme::set_strength(strength);
             window.refresh();
@@ -362,6 +453,16 @@ fn track_strength(bounds: Bounds<Pixels>, browser: WeakEntity<Browser>, window: 
                 .ok();
         }
     });
+}
+
+/// An SVG filling its parent, to stack with others and tint apart.
+fn layer(data: &'static [u8]) -> gpui::Svg {
+    svg().data(data).absolute().inset_0().size_full()
+}
+
+/// A line between the menu's sections.
+fn divider() -> Div {
+    div().h(px(1.)).mx(px(10.)).bg(theme::line())
 }
 
 /// A line in the menu: what it sets, then its control.

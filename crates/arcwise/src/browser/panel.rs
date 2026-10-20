@@ -342,14 +342,12 @@ impl Browser {
                     self.image(&self.library.start_still(lineup.id), cx).ready(),
                     true,
                 ),
-                SharedString::from("full clip"),
             ),
             (
                 View::Stand,
                 "W",
                 "1 · Stand",
                 self.stand_zoom(lineup, color, px(9.), self.stand_tile.clone(), false, cx),
-                place(lineup.stand.callout.as_deref()).into(),
             ),
             (
                 View::Aim,
@@ -368,7 +366,6 @@ impl Browser {
                         .child("none")
                         .into_any_element()
                 },
-                if has_aim { "crosshair" } else { "no picture" }.into(),
             ),
             (
                 View::Lands,
@@ -378,11 +375,10 @@ impl Browser {
                     self.image(&self.library.end_still(lineup.id), cx).ready(),
                     false,
                 ),
-                place(lineup.land.callout.as_deref()).into(),
             ),
         ];
         div().flex().gap(px(8.)).children(tiles.into_iter().map(
-            |(tile_view, key, label, media, sub)| {
+            |(tile_view, key, label, media)| {
                 let on = tile_view == view;
                 let border: Hsla = if tile_view == pinned {
                     color
@@ -419,13 +415,6 @@ impl Browser {
                             .text_size(px(12.))
                             .child(ui::kbd(key, false))
                             .child(label),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme::muted())
-                            .truncate()
-                            .child(sub),
                     )
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         this.peek_view = if *hovered {
@@ -590,7 +579,6 @@ fn keys() -> Div {
         .text_color(theme::faint())
         .child(hint(&["↑", "↓"], "landing"))
         .child(hint(&["←", "→"], "throw from"))
-        .child(hint(&["Q", "W", "E", "R"], "views"))
         .child(hint(&["Space"], "pause"))
         .child(hint(&["S"], "slow-mo"))
         .child(hint(&["Tab"], "side"))

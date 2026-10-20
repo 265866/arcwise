@@ -6,14 +6,15 @@ use std::sync::Arc;
 
 use arcwise_core::Agent;
 use gpui::{
-    Bounds, Div, ElementId, FontWeight, Hsla, ImageSource, ObjectFit, Pixels, RenderImage,
-    SharedString, Stateful, Transformation, canvas, div, img, prelude::*, px, svg,
+    AnyView, App, Bounds, Context, Div, ElementId, FontWeight, Hsla, ImageSource, ObjectFit,
+    Pixels, RenderImage, SharedString, Stateful, Transformation, Window, canvas, div, img,
+    prelude::*, px, svg,
 };
 
 use crate::theme;
 
-/// The header bar's height.
-pub const BAR_HEIGHT: Pixels = px(60.);
+/// The header bar's height: 9px above and below its 42px controls, and its 1px bottom border.
+pub const BAR_HEIGHT: Pixels = px(61.);
 
 /// The header bar along the top of the window.
 pub fn bar() -> Div {
@@ -40,19 +41,66 @@ const RING: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34
 /// A quarter of [`RING`], from three o'clock to six.
 const ARC: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34"><path d="M32.5 17A15.5 15.5 0 0 1 17 32.5" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
 
+/// A cog, on the buttons that open the settings menu: teeth from a dashed ring, around a ring for
+/// the body.
+pub const GEAR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#000" stroke-width="3.5" stroke-dasharray="3.534 3.534"/><circle cx="12" cy="12" r="6" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
+
+/// A small square button with an icon, such as [`GEAR`], tinted `color`.
+pub fn icon_button(
+    id: impl Into<ElementId>,
+    icon: &'static [u8],
+    size: Pixels,
+    color: impl Into<Hsla>,
+) -> Stateful<Div> {
+    icon_frame(id, size)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::raised()).border_color(theme::line_hover()))
+        .child(svg().data(icon).size(size * 0.43).text_color(color))
+}
+
+/// The border of an [`icon_button`], with nothing in it and nothing to do.
+pub fn icon_frame(id: impl Into<ElementId>, size: Pixels) -> Stateful<Div> {
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(size)
+        .rounded(size * 0.25)
+        .border_1()
+        .border_color(theme::line())
+}
+
+/// A tooltip of one short line, for `.tooltip(ui::tip(..))`.
+pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView {
+    let text = text.into();
+    move |_, cx| cx.new(|_| Tip(text.clone())).into()
+}
+
+struct Tip(SharedString);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(8.))
+            .py(px(5.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme::line_hover())
+            .bg(theme::panel())
+            .shadow_md()
+            // Drawn apart from the window's root, so nothing is inherited from it.
+            .font_family(theme::FONT)
+            .text_size(px(12.))
+            .text_color(theme::text())
+            .child(self.0.clone())
+    }
+}
+
 /// A bordered button with a text label.
 pub fn button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
-    button_shape(id, label)
-        .cursor_pointer()
-        .hover(|s| s.bg(theme::hover()).border_color(theme::muted()))
-}
-
-/// A [`button`] with nothing to do for now: dimmed, and not lit by the pointer.
-pub fn idle_button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
-    button_shape(id, label).opacity(0.4)
-}
-
-fn button_shape(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -65,6 +113,8 @@ fn button_shape(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> 
         .border_color(theme::line_hover())
         .bg(theme::raised())
         .font_weight(FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::hover()).border_color(theme::muted()))
         .child(label)
 }
 

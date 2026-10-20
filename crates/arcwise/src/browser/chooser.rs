@@ -174,9 +174,7 @@ impl Browser {
             .flex()
             .flex_col()
             .gap(px(18.))
-            .when(!dropdown, |d| {
-                d.child(heading(None, "1 of 2", "Choose a map"))
-            })
+            .when(!dropdown, |d| d.child(heading(None, "Choose a map")))
             .child(
                 div()
                     .w((width + px(if dropdown { 8. } else { 10. })) * 3.)
@@ -299,9 +297,7 @@ impl Browser {
             .flex()
             .flex_col()
             .gap(px(18.))
-            .when(!dropdown, |d| {
-                d.child(heading(back, "2 of 2", "Choose an agent"))
-            })
+            .when(!dropdown, |d| d.child(heading(back, "Choose an agent")))
             .child(
                 div()
                     .flex()
@@ -326,14 +322,13 @@ impl Browser {
     }
 }
 
-fn heading(back: Option<AnyElement>, step: &'static str, title: &'static str) -> Div {
+fn heading(back: Option<AnyElement>, title: &'static str) -> Div {
     div()
         .flex()
         .flex_col()
         .items_start()
         .gap(px(4.))
         .children(back)
-        .child(ui::label(step).font_weight(FontWeight::BOLD))
         .child(
             div()
                 .font_family(theme::DISPLAY_FONT)
