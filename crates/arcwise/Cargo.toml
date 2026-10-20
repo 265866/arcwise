@@ -20,7 +20,6 @@ resvg = { version = "0.46", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 semver = "1"
-sha2 = "0.10"
 # Pinned: still 0.x, and each release refreshes the Sigstore trust root built into the app.
 sigstore-verify = { version = "=0.15.0", default-features = false, features = ["aws-lc-rs"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }

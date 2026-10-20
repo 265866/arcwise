@@ -46,6 +46,8 @@ SolidCompression=yes
 ; starts to update itself, close it without asking.
 CloseApplications=yes
 RestartApplications=no
+; Two copies of Arcwise can each finish downloading an update and start its installer.
+SetupMutex=Arcwise.Setup
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

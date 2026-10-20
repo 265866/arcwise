@@ -147,7 +147,6 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2",
  "sigstore-verify",
  "ureq",
  "windows 0.62.2",
