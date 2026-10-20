@@ -27,32 +27,11 @@ pub fn bar() -> Div {
         .border_b_1()
         .border_color(theme::line())
         .bg(theme::panel())
-        .child(brand())
-}
-
-fn brand() -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .mr(px(14.))
-        .font_family(theme::DISPLAY_FONT)
-        .font_weight(FontWeight::EXTRA_BOLD)
-        .text_size(px(13.))
-        .child(diamond(px(14.), theme::accent()))
-        .child("ARCWISE")
-}
-
-/// The brand mark: a square stood on its corner.
-pub fn diamond(size: Pixels, color: impl Into<Hsla>) -> impl IntoElement {
-    svg().data(DIAMOND).size(size).text_color(color.into())
 }
 
 // The fixed shapes are SVGs, which GPUI draws as masks in its sprite atlas, tinted with the text
 // color. Paths would cost a window-sized multisampled texture, about 27 MB of GPU memory, once
 // any one was drawn.
-const DIAMOND: &[u8] =
-    br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><path d="M1 0 2 1 1 2 0 1Z"/></svg>"#;
 const CHEVRON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M2 4 6 8 10 4" fill="none" stroke="#000" stroke-width="2"/></svg>"##;
 const PLAY: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 2 2"><path d="M-0.6-1 1 0-0.6 1Z"/></svg>"#;
 const ARROW_HEAD: &[u8] =
