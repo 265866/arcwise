@@ -19,7 +19,7 @@ use crate::{theme, ui};
 const STAND_ZOOM: f32 = 3.;
 
 impl Browser {
-    /// The panel at `open` of its full width, half the board's.
+    /// The panel's contents, faded and nudged in as it slides `open`; the browser sets its width.
     pub(super) fn panel(&self, open: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let lineup = self.library.lineup(self.shown?)?;
         let landing = self
@@ -32,8 +32,7 @@ impl Browser {
         Some(
             div()
                 .id("panel")
-                .flex_none()
-                .w(gpui::relative(open * 0.5))
+                .size_full()
                 .h_full()
                 .overflow_x_hidden()
                 .overflow_y_scroll()
@@ -193,7 +192,7 @@ impl Browser {
                     self.image(&self.library.start_still(lineup.id), cx).ready(),
                     false,
                 ))
-                .child(div().absolute().inset_0().child(self.player.clone()))
+                .child(super::follow::place(self.clip_slot.clone()))
                 .into_any_element(),
             View::Stand => self.stand_zoom(lineup, color, px(16.), self.stand_view.clone(), cx),
             View::Aim => match self.aim(lineup.id, cx) {
@@ -213,7 +212,8 @@ impl Browser {
                 .filter(|path| matches!(self.image(path, cx), Image::Ready(_))),
             View::Clip | View::Stand => None,
         };
-        let note = matches!(view, View::Clip | View::Aim)
+        // Over the clip, the browser draws the note with the clip; see [`Browser::clip_note`].
+        let note = (view == View::Aim)
             .then(|| lineup.steps.as_ref()?.note.clone())
             .flatten();
         div()
@@ -242,18 +242,13 @@ impl Browser {
                     }))
             })
             .child(body)
-            .children(note.map(|note| {
-                div()
-                    .absolute()
-                    .left(px(10.))
-                    .bottom(px(12.))
-                    .px(px(10.))
-                    .py(px(6.))
-                    .rounded(px(7.))
-                    .bg(theme::alpha(gpui::black(), 0.78))
-                    .text_size(px(13.))
-                    .child(note)
-            }))
+            .children(note.map(note_box))
+    }
+
+    /// The shown lineup's note, to draw over its clip.
+    pub(super) fn clip_note(&self) -> Option<Div> {
+        let lineup = self.library.lineup(self.shown?)?;
+        Some(note_box(lineup.steps.as_ref()?.note.clone()?))
     }
 
     /// The map around the lineup's stand spot, with its throw.
@@ -433,6 +428,20 @@ impl Browser {
             },
         ))
     }
+}
+
+/// A note along the bottom left of the viewer.
+fn note_box(note: impl Into<SharedString>) -> Div {
+    div()
+        .absolute()
+        .left(px(10.))
+        .bottom(px(12.))
+        .px(px(10.))
+        .py(px(6.))
+        .rounded(px(7.))
+        .bg(theme::alpha(gpui::black(), 0.78))
+        .text_size(px(13.))
+        .child(note.into())
 }
 
 /// A picture filling its box, with a play mark over it for the clip's tile.

@@ -2,6 +2,7 @@
 
 mod board;
 mod chooser;
+mod follow;
 mod header;
 mod keys;
 mod panel;
@@ -26,6 +27,7 @@ use crate::drawn::Drawn;
 use crate::images::{Image, Images, Look, Picture};
 use crate::player::Player;
 use crate::ui;
+use follow::Follow;
 use part::Part;
 use slide::Slide;
 
@@ -70,6 +72,10 @@ pub struct Browser {
     waiting: bool,
     /// The most rows the viewer shows, from the last render; see [`viewer_rows`].
     rows: u32,
+    /// How far open the panel is, from the last render.
+    open: f32,
+    /// Where the panel last placed the clip.
+    clip_slot: follow::Slot,
     /// The selected landing's throws on the map, and the throw in the stand views.
     throws: Rc<Drawn>,
     stand_tile: Rc<Drawn>,
@@ -119,6 +125,8 @@ impl Browser {
             parts: None,
             waiting: false,
             rows: viewer_rows_for(crate::WINDOW_WIDTH, 1.),
+            open: 0.,
+            clip_slot: Rc::default(),
             throws: Rc::default(),
             stand_tile: Rc::default(),
             stand_view: Rc::default(),
@@ -168,7 +176,9 @@ impl Browser {
         !self.waiting
             && !self.player.read(cx).waiting()
             && self.parts.as_ref().is_none_or(|parts| {
-                !parts.header.read(cx).waiting() && !parts.map.read(cx).waiting()
+                [&parts.header, &parts.map, &parts.panel]
+                    .iter()
+                    .all(|part| !part.read(cx).waiting())
             })
     }
 
@@ -257,6 +267,11 @@ impl Browser {
         }
     }
 
+    /// Whether the viewer shows the clip, rather than a picture, and nothing covers it.
+    fn clip_in_view(&self) -> bool {
+        self.peek_view.unwrap_or(self.browse.view()) == View::Clip && self.lightbox.is_none()
+    }
+
     /// Keeps the player on the shown lineup's clip, or stopped when the panel is closed.
     /// The player is held still while the viewer shows a picture instead of the clip, or the
     /// lightbox covers it, and frees the frames it replaced here because it is not always on
@@ -264,8 +279,7 @@ impl Browser {
     fn sync_player(&self, window: &mut Window, cx: &mut Context<Self>) {
         let clip = self.shown.map(|id| (id, self.library.clip(id)));
         let max_height = viewer_rows(window);
-        let visible =
-            self.peek_view.unwrap_or(self.browse.view()) == View::Clip && self.lightbox.is_none();
+        let visible = self.clip_in_view();
         self.player.update(cx, |player, cx| {
             match clip {
                 Some((id, path)) => player.play(id, path, max_height, cx),
@@ -291,6 +305,7 @@ impl Render for Browser {
         let selected = self.browse.selected_lineup();
         self.slide.set(selected.is_some(), now);
         let open = self.slide.at(now);
+        self.open = open;
         if self.slide.moving(now) {
             window.request_animation_frame();
         }
@@ -304,6 +319,7 @@ impl Render for Browser {
         self.prefetch(cx);
         self.prepare_clip(window, cx);
         self.emit_choice(cx);
+        let clip = self.shown.is_some() && self.clip_in_view();
         let parts = self.parts(cx);
         let element = div()
             .track_focus(&self.focus)
@@ -343,8 +359,26 @@ impl Render for Browser {
                             .map
                             .cached(StyleRefinement::default().flex_1().min_w_0().h_full()),
                     )
-                    .children(self.panel(open, cx)),
+                    .when(self.shown.is_some(), |row| {
+                        row.child(
+                            parts.panel.cached(
+                                StyleRefinement::default()
+                                    .flex_none()
+                                    .w(gpui::relative(open * 0.5))
+                                    .h_full(),
+                            ),
+                        )
+                    }),
             )
+            .when(clip, |d| {
+                let player = div()
+                    .relative()
+                    .size_full()
+                    .opacity(open)
+                    .child(self.player.clone())
+                    .children(self.clip_note());
+                d.child(Follow::new(self.clip_slot.clone(), player))
+            })
             .children(self.chooser(window, cx))
             .children(self.lightbox(cx));
         self.waiting = self.images.read(cx).waiting();
@@ -353,9 +387,11 @@ impl Render for Browser {
 }
 
 /// The browser's parts that GPUI can reuse from the last frame.
+#[derive(Clone)]
 struct Parts {
     header: Entity<Part>,
     map: Entity<Part>,
+    panel: Entity<Part>,
 }
 
 impl Browser {
@@ -373,12 +409,19 @@ impl Browser {
                 map: cx.new(|cx| {
                     Part::new(&browser, |b, _, cx| b.map_column(cx).into_any_element(), cx)
                 }),
+                panel: cx.new(|cx| {
+                    Part::new(
+                        &browser,
+                        |b, _, cx| {
+                            b.panel(b.open, cx)
+                                .unwrap_or_else(|| div().into_any_element())
+                        },
+                        cx,
+                    )
+                }),
             }
         });
-        Parts {
-            header: parts.header.clone(),
-            map: parts.map.clone(),
-        }
+        parts.clone()
     }
 }
 
