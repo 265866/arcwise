@@ -59,6 +59,8 @@ pub struct Browser {
     prefetched: Option<LandingKey>,
     /// The map and side whose other side was last fetched ahead.
     prefetched_map: Option<(MapId, Side)>,
+    /// The lineup whose clip was last readied ahead.
+    prepared: Option<LineupId>,
     /// The choice last emitted as [`Chosen`].
     chosen: Option<Chosen>,
     /// The header and map, as views of their own; made on the first render.
@@ -95,6 +97,7 @@ impl Browser {
             shown: None,
             prefetched: None,
             prefetched_map: None,
+            prepared: None,
             chosen: None,
             parts: None,
             waiting: false,
@@ -205,6 +208,34 @@ impl Browser {
         });
     }
 
+    /// Readies the clip most likely to play next: a stand spot or landing under the pointer, or
+    /// else the landing the down key reaches.
+    fn prepare_clip(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let landings = self.browse.landings();
+        let next = || {
+            let at = self
+                .browse
+                .selected_landing()
+                .and_then(|g| landings.iter().position(|l| l.key == g.key))
+                .map_or(0, |at| at + 1);
+            Some(landings.get(at % landings.len().max(1))?.lineups[0])
+        };
+        let target = self
+            .peek_lineup
+            .or_else(|| Some(self.browse.landing(self.hovered?)?.lineups[0]))
+            .or_else(next)
+            .filter(|&id| Some(id) != self.shown);
+        if target.is_none() || target == self.prepared {
+            return;
+        }
+        self.prepared = target;
+        if let Some(id) = target {
+            let path = self.library.clip(id);
+            let rows = viewer_rows(window);
+            self.player.read(cx).prepare(path, rows);
+        }
+    }
+
     /// Keeps the player on the shown lineup's clip, or stopped when the panel is closed.
     /// The player is held still while the viewer shows a picture instead of the clip, or the
     /// lightbox covers it, and frees the frames it replaced here because it is not always on
@@ -249,6 +280,7 @@ impl Render for Browser {
         self.sync_player(window, cx);
         self.prefetch_map(cx);
         self.prefetch(cx);
+        self.prepare_clip(window, cx);
         self.emit_choice(cx);
         let parts = self.parts(cx);
         let element = div()

@@ -72,6 +72,13 @@ impl Player {
         cx.notify();
     }
 
+    /// Readies a clip that may play next, so it shows at once if it does.
+    pub fn prepare(&self, path: PathBuf, max_height: u32) {
+        if let Ok(decoder) = &self.decoder {
+            decoder.prepare(path, Some(max_height));
+        }
+    }
+
     /// Stops playing and lets go of the clip.
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         if self.clip.is_none() {
