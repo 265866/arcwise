@@ -95,26 +95,11 @@ impl Browser {
     fn map(&self, cx: &mut Context<Self>) -> AnyElement {
         let area = self.map_area.get().size;
         let side = area.width.min(area.height);
-        let (Some(map), Some(agent)) = (
-            self.browse.map(),
-            self.browse.agent().and_then(|id| self.library.agent(id)),
-        ) else {
+        let Some(map) = self.browse.map() else {
             return div().into_any_element();
         };
         let image = self.map_picture(map, self.browse.side(), cx);
-        // Markers wait for the map and the ability icons, so they never float over an empty
-        // square or show as empty rings.
-        let icons_ready = agent.abilities.iter().all(|ab| {
-            !matches!(
-                self.image(&self.library.ability_icon(ab.id), cx),
-                Image::Loading
-            )
-        });
-        // A missing map picture still shows the landings, over a note saying it is missing.
-        let ready = !matches!(image, Image::Loading) && icons_ready;
         let missing = matches!(image, Image::Missing);
-        let color: Hsla = theme::agent(agent.color).into();
-        let selected = self.browse.selected_landing().map(|g| g.key);
         let mut square = div()
             .relative()
             .flex_none()
@@ -140,6 +125,22 @@ impl Browser {
                     .child("This side's map picture is missing from the library."),
             );
         }
+        // While an agent is being chosen, the map shows on its own.
+        let Some(agent) = self.browse.agent().and_then(|id| self.library.agent(id)) else {
+            return square.into_any_element();
+        };
+        // Markers wait for the map and the ability icons, so they never float over an empty
+        // square or show as empty rings.
+        let icons_ready = agent.abilities.iter().all(|ab| {
+            !matches!(
+                self.image(&self.library.ability_icon(ab.id), cx),
+                Image::Loading
+            )
+        });
+        // A missing map picture still shows the landings, over a note saying it is missing.
+        let ready = !matches!(image, Image::Loading) && icons_ready;
+        let color: Hsla = theme::agent(agent.color).into();
+        let selected = self.browse.selected_landing().map(|g| g.key);
         if ready {
             // The selected landing last, so it draws over its neighbours.
             let markers: Vec<AnyElement> = self

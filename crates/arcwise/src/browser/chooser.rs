@@ -97,7 +97,7 @@ impl Browser {
                 .items_center()
                 .justify_center()
                 .p(px(24.))
-                .bg(theme::alpha(gpui::rgb(0x05070a), 0.85))
+                .bg(theme::alpha(gpui::rgb(0x05070a), 0.6))
                 .occlude()
                 .on_mouse_down(MouseButton::Left, dismiss)
                 .child(card)
