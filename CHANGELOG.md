@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/265866/arcwise/compare/v0.2.0...v0.3.0) - 2026-10-20
+
+### Added
+
+- *(app)* updates install quietly, with a badge and relaunch button when off ([#9](https://github.com/265866/arcwise/pull/9))
+
 ## [0.2.0](https://github.com/265866/arcwise/compare/v0.1.0...v0.2.0) - 2026-10-20
 
 ### Added
