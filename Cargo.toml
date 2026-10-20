@@ -15,8 +15,8 @@ anyhow = "1"
 arcwise-core = { path = "crates/arcwise-core" }
 arcwise-video = { path = "crates/arcwise-video" }
 # A commit on Zed's main branch; the crates.io release of gpui is a year behind it.
-gpui = { git = "https://github.com/zed-industries/zed", rev = "52b2927a1bac46be5d50ad341ac00b665e13764b" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "52b2927a1bac46be5d50ad341ac00b665e13764b" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "e39fb7c2e0560d013df0e77bce1922bf5cce1ad9" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "e39fb7c2e0560d013df0e77bce1922bf5cce1ad9" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "2"
@@ -32,7 +32,7 @@ undocumented_unsafe_blocks = "warn"
 # The forks Zed's own workspace patches in; gpui is only tested against them.
 [patch.crates-io]
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
-async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
 
 [profile.release]
 lto = "thin"
