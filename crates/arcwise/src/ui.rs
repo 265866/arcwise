@@ -42,6 +42,17 @@ const ARC: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 
 
 /// A bordered button with a text label.
 pub fn button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
+    button_shape(id, label)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::hover()).border_color(theme::muted()))
+}
+
+/// A [`button`] with nothing to do for now: dimmed, and not lit by the pointer.
+pub fn idle_button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
+    button_shape(id, label).opacity(0.4)
+}
+
+fn button_shape(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -54,8 +65,6 @@ pub fn button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
         .border_color(theme::line_hover())
         .bg(theme::raised())
         .font_weight(FontWeight::SEMIBOLD)
-        .cursor_pointer()
-        .hover(|s| s.bg(theme::hover()).border_color(theme::muted()))
         .child(label)
 }
 

@@ -7,6 +7,7 @@ use gpui::{
 };
 
 use super::{Browser, ChangeLibrary, SetBlur, SetBlurStrength};
+use crate::settings::Settings;
 use crate::{theme, ui};
 
 /// A cog: teeth from a dashed ring, around a ring for the body.
@@ -152,6 +153,27 @@ impl Browser {
                     })),
             )
             .when(blur, |menu| menu.child(self.strength_row(cx)))
+            .child(div().h(px(1.)).mx(px(10.)).bg(theme::line()))
+            .child(row().justify_end().child(self.reset_button(cx)))
+    }
+
+    /// Puts every setting but the library back as it first was. Dimmed while they already are.
+    fn reset_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let defaults = Settings::default();
+        let changed = theme::blur() != defaults.blur || theme::strength() != defaults.blur_strength;
+        if !changed {
+            return ui::idle_button("reset-settings", "Reset to defaults");
+        }
+        ui::button("reset-settings", "Reset to defaults").on_click(cx.listener(
+            move |_, _, window, cx| {
+                theme::set_blur(defaults.blur);
+                theme::set_strength(defaults.blur_strength);
+                window.set_background_appearance(theme::window_background());
+                window.refresh();
+                cx.emit(SetBlur(defaults.blur));
+                cx.emit(SetBlurStrength(defaults.blur_strength));
+            },
+        ))
     }
 
     /// How much of the blur shows: a track to click or drag along, which changes the window as
