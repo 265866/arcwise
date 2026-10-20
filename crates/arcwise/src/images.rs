@@ -39,6 +39,32 @@ struct Entry {
     used: u64,
 }
 
+/// A picture decoded off the UI thread, ready to go into [`Images`].
+pub type Picture = (PathBuf, Look, anyhow::Result<Arc<RenderImage>>);
+
+/// Decodes pictures on a few threads at once.
+pub fn decode_all(wanted: Vec<(PathBuf, Look)>) -> Vec<Picture> {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+    let chunk = wanted.len().div_ceil(threads).max(1);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = wanted
+            .chunks(chunk)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|(path, look)| (path.clone(), *look, decode(path, *look)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("a decode thread panicked"))
+            .collect()
+    })
+}
+
 /// How an image is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Look {
@@ -70,6 +96,29 @@ impl Images {
     /// The image at `path`, starting to load it if it is not in memory.
     pub fn get(&mut self, path: &Path, cx: &mut Context<Self>) -> Image {
         self.get_as(path, Look::Plain, cx)
+    }
+
+    /// Takes in pictures decoded ahead, such as at launch.
+    pub fn seed(&mut self, pictures: Vec<Picture>) {
+        for (path, look, decoded) in pictures {
+            self.clock += 1;
+            let (image, bytes) = match decoded {
+                Ok(image) => {
+                    let bytes = image.as_bytes(0).map_or(0, <[u8]>::len);
+                    (Image::Ready(image), bytes)
+                }
+                Err(e) => {
+                    if path.exists() {
+                        eprintln!("arcwise: {e:#}");
+                    }
+                    (Image::Missing, 0)
+                }
+            };
+            self.bytes += bytes;
+            let used = self.clock;
+            self.entries(look)
+                .insert(path, Entry { image, bytes, used });
+        }
     }
 
     /// Starts drawing a frame: forgets what the last one waited for.

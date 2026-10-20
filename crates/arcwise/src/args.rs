@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use arcwise_core::{LineupId, Side, View};
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Args {
     pub library: Option<PathBuf>,
     pub map: Option<String>,

@@ -18,10 +18,13 @@ use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*
 
 use crate::app::Arcwise;
 use crate::args::Args;
+use crate::settings::Settings;
 
 fn main() {
     trace::init();
     let args = Args::parse(std::env::args_os().skip(1));
+    let settings = Settings::load();
+    let preload = app::preload(&args, &settings);
     gpui_platform::application().run(move |cx: &mut App| {
         if trace::enabled() {
             cx.intercept_keystrokes(|event, _, _| {
@@ -45,7 +48,7 @@ fn main() {
                 }),
                 ..WindowOptions::default()
             },
-            |_, cx| cx.new(|cx| Arcwise::new(args, cx)),
+            |_, cx| cx.new(|cx| Arcwise::new(args, settings, preload, cx)),
         )
         .expect("open the main window");
         cx.activate(true);

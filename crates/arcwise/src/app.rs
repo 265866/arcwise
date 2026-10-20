@@ -1,10 +1,11 @@
 //! The window's root: finds and loads the library, then shows it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
-use arcwise_core::{Library, Start};
+use arcwise_core::{Library, LoadError, Start};
 use gpui::{
     AsyncApp, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable, FontWeight, IntoElement,
     MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString, WeakEntity, Window, canvas, div,
@@ -12,7 +13,8 @@ use gpui::{
 };
 
 use crate::args::Args;
-use crate::browser::{Browser, ChangeLibrary, Chosen};
+use crate::browser::{self, Browser, ChangeLibrary, Chosen};
+use crate::images::{self, Picture};
 use crate::settings::{Last, Settings};
 use crate::{theme, trace, ui};
 
@@ -37,8 +39,12 @@ pub struct Arcwise {
 }
 
 impl Arcwise {
-    pub fn new(args: Result<Args, String>, cx: &mut Context<Self>) -> Self {
-        let settings = Settings::load();
+    pub fn new(
+        args: Result<Args, String>,
+        settings: Settings,
+        preload: Option<Receiver<Opened>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut this = Arcwise {
             screen: Screen::Welcome { problem: None },
             settings,
@@ -58,85 +64,108 @@ impl Arcwise {
                     .clone()
                     .or_else(|| this.settings.library.clone());
                 this.start = Some(args);
-                if let Some(path) = library {
-                    this.load(path, cx);
+                match (library, preload) {
+                    (Some(path), Some(preload)) => this.take_preload(&path, preload, cx),
+                    (Some(path), None) => this.load(path, cx),
+                    (None, _) => {}
                 }
             }
         }
         this
     }
 
+    /// Takes the library read since launch: at once when it is ready, as it usually is by the
+    /// time the window opens, so the first frame shows it.
+    fn take_preload(&mut self, path: &Path, preload: Receiver<Opened>, cx: &mut Context<Self>) {
+        let load = self.begin_load(path, cx);
+        match preload.recv_timeout(PRELOAD_WAIT) {
+            Ok(opened) => self.opened(load, opened, cx),
+            Err(_) => {
+                let task = cx.background_spawn(async move { preload.recv().ok() });
+                cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    if let Some(opened) = task.await {
+                        this.update(cx, |this, cx| this.opened(load, opened, cx))
+                            .ok();
+                    }
+                })
+                .detach();
+            }
+        }
+    }
+
     /// Loads the library at `path`. A library already open stays on screen until the new one has
     /// loaded, and stays if it fails.
     fn load(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        // Only the latest request counts; one overtaken by another is dropped when it finishes.
+        let load = self.begin_load(&path, cx);
+        let request = Request::new(path, self.start.clone().unwrap_or_default(), &self.settings);
+        let task = cx.background_spawn(async move { request.open() });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let opened = task.await;
+            this.update(cx, |this, cx| this.opened(load, opened, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Starts a load, and returns its number. Only the latest load counts; one overtaken by
+    /// another is dropped when it finishes.
+    fn begin_load(&mut self, path: &Path, cx: &mut Context<Self>) -> u64 {
         self.loads += 1;
-        let load = self.loads;
         if !matches!(self.screen, Screen::Browsing(_)) {
-            self.screen = Screen::Loading(path.clone());
+            self.screen = Screen::Loading(path.to_owned());
         }
         self.notice = None;
         cx.notify();
-        let task = cx.background_spawn({
-            let path = path.clone();
-            async move {
-                let start = Instant::now();
-                let library = Library::open(&path);
-                trace::task(|| "library".into(), start);
-                library
+        self.loads
+    }
+
+    /// Shows a library that has been read, or why it could not be.
+    fn opened(&mut self, load: u64, opened: Opened, cx: &mut Context<Self>) {
+        if self.loads != load {
+            return;
+        }
+        let Opened { path, result } = opened;
+        match result {
+            Ok((library, start, pictures)) => {
+                let same_library = self.settings.library.as_ref() == Some(&path);
+                self.start = None;
+                let library = Arc::new(library);
+                let browser = cx.new(|cx| Browser::new(library, start, pictures, cx));
+                cx.subscribe(&browser, |this, _, chosen: &Chosen, _| {
+                    this.settings.last = Some(Last {
+                        map: chosen.map.clone(),
+                        agent: chosen.agent.clone(),
+                        side: chosen.side,
+                    });
+                    this.save_settings();
+                })
+                .detach();
+                cx.subscribe(&browser, |this, _, _: &ChangeLibrary, cx| {
+                    this.pick_folder(cx);
+                })
+                .detach();
+                if let Screen::Browsing(old) = &self.screen {
+                    old.update(cx, |old, cx| old.release_all(cx));
+                }
+                self.screen = Screen::Browsing(browser);
+                if !same_library {
+                    self.settings.library = Some(path);
+                    self.settings.last = None;
+                    self.save_settings();
+                }
             }
-        });
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                if this.loads != load {
-                    return;
+            Err(e) => {
+                let problem = format!("{:#}", anyhow::Error::from(e)).into();
+                if matches!(self.screen, Screen::Browsing(_)) {
+                    self.notice = Some(problem);
+                } else {
+                    self.screen = Screen::Welcome {
+                        problem: Some(problem),
+                    };
                 }
-                match result {
-                    Ok(library) => {
-                        let same_library = this.settings.library.as_ref() == Some(&path);
-                        let last = this.settings.last.clone().filter(|_| same_library);
-                        let start = start(&library, this.start.take().unwrap_or_default(), last);
-                        let library = Arc::new(library);
-                        let browser = cx.new(|cx| Browser::new(library, start, cx));
-                        cx.subscribe(&browser, |this, _, chosen: &Chosen, _| {
-                            this.settings.last = Some(Last {
-                                map: chosen.map.clone(),
-                                agent: chosen.agent.clone(),
-                                side: chosen.side,
-                            });
-                            this.save_settings();
-                        })
-                        .detach();
-                        cx.subscribe(&browser, |this, _, _: &ChangeLibrary, cx| {
-                            this.pick_folder(cx);
-                        })
-                        .detach();
-                        if let Screen::Browsing(old) = &this.screen {
-                            old.update(cx, |old, cx| old.release_all(cx));
-                        }
-                        this.screen = Screen::Browsing(browser);
-                        if !same_library {
-                            this.settings.library = Some(path);
-                            this.settings.last = None;
-                            this.save_settings();
-                        }
-                    }
-                    Err(e) => {
-                        let problem = format!("{:#}", anyhow::Error::from(e)).into();
-                        if matches!(this.screen, Screen::Browsing(_)) {
-                            this.notice = Some(problem);
-                        } else {
-                            this.screen = Screen::Welcome {
-                                problem: Some(problem),
-                            };
-                        }
-                    }
-                }
-                cx.notify();
-            })
-        })
-        .detach();
+            }
+        }
+        cx.notify();
     }
 
     /// A note along the bottom of the window; clicking it dismisses it.
@@ -323,6 +352,68 @@ impl Render for Arcwise {
             root
         }
     }
+}
+
+/// How long the window waits for the library read since launch before opening without it.
+const PRELOAD_WAIT: Duration = Duration::from_millis(100);
+
+/// A library to read off the UI thread, and where to open it.
+pub struct Request {
+    path: PathBuf,
+    /// The command line's choice of where to start.
+    args: Args,
+    /// What was on screen last, when this is the library open last time.
+    last: Option<Last>,
+}
+
+/// A library read off the UI thread, with the pictures it first shows already decoded.
+pub struct Opened {
+    path: PathBuf,
+    result: Result<(Library, Start, Vec<Picture>), LoadError>,
+}
+
+impl Request {
+    pub fn new(path: PathBuf, args: Args, settings: &Settings) -> Request {
+        let last = settings
+            .last
+            .clone()
+            .filter(|_| settings.library.as_ref() == Some(&path));
+        Request { path, args, last }
+    }
+
+    /// Reads the library and decodes the pictures it opens on. Takes tens of milliseconds.
+    pub fn open(self) -> Opened {
+        let begun = Instant::now();
+        let library = Library::open(&self.path);
+        trace::task(|| "library".into(), begun);
+        let result = library.map(|library| {
+            let start = start(&library, self.args, self.last);
+            let begun = Instant::now();
+            let pictures = images::decode_all(browser::first_pictures(&library, start.clone()));
+            trace::task(|| "first pictures".into(), begun);
+            (library, start, pictures)
+        });
+        Opened {
+            path: self.path,
+            result,
+        }
+    }
+}
+
+/// Starts reading the library launch will open, on a thread of its own, while GPUI spends a few
+/// hundred milliseconds opening the window.
+pub fn preload(args: &Result<Args, String>, settings: &Settings) -> Option<Receiver<Opened>> {
+    let args = args.as_ref().ok()?;
+    let path = args.library.clone().or_else(|| settings.library.clone())?;
+    let request = Request::new(path, args.clone(), settings);
+    let (opened, preload) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("arcwise-preload".into())
+        .spawn(move || {
+            let _ = opened.send(request.open());
+        })
+        .ok()?;
+    Some(preload)
 }
 
 /// Where to open: the command line's choice when it makes one, otherwise what was on screen

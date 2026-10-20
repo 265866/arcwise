@@ -22,7 +22,7 @@ use gpui::{
     StyleRefinement, Window, div, prelude::*,
 };
 
-use crate::images::{Image, Images};
+use crate::images::{Image, Images, Look, Picture};
 use crate::player::Player;
 use crate::ui;
 use part::Part;
@@ -78,8 +78,18 @@ pub struct ChangeLibrary;
 impl EventEmitter<ChangeLibrary> for Browser {}
 
 impl Browser {
-    pub fn new(library: Arc<Library>, start: Start, cx: &mut Context<Self>) -> Self {
-        let images = cx.new(|_| Images::default());
+    /// A browser over `library`, opening at `start`, with `pictures` already decoded for it.
+    pub fn new(
+        library: Arc<Library>,
+        start: Start,
+        pictures: Vec<Picture>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let images = cx.new(|_| {
+            let mut images = Images::default();
+            images.seed(pictures);
+            images
+        });
         cx.observe(&images, |_, _, cx| cx.notify()).detach();
         let browse = Browse::new(&library, start);
         let this = Browser {
@@ -179,35 +189,18 @@ impl Browser {
         });
     }
 
-    /// Fetches the pictures the keys can reach next, so stepping to them shows them at once:
-    /// every stand spot of the selected landing and the first of the landings either side, or
-    /// with nothing selected, the first and last landings.
+    /// Fetches the pictures the keys can reach next, so stepping to them shows them at once.
     fn prefetch(&mut self, cx: &mut Context<Self>) {
         let landings = self.browse.landings();
         let Some(first) = landings.first() else {
             return;
         };
-        let selected = self.browse.selected_landing().map(|g| g.key);
-        let key = (selected, first.key);
+        let key = (self.browse.selected_landing().map(|g| g.key), first.key);
         if self.prefetched == Some(key) {
             return;
         }
         self.prefetched = Some(key);
-        let n = landings.len();
-        let ids: Vec<LineupId> =
-            match selected.and_then(|key| landings.iter().position(|l| l.key == key)) {
-                Some(at) => landings[at]
-                    .lineups
-                    .iter()
-                    .copied()
-                    .chain([
-                        landings[(at + 1) % n].lineups[0],
-                        landings[(at + n - 1) % n].lineups[0],
-                    ])
-                    .collect(),
-                None => vec![first.lineups[0], landings[n - 1].lineups[0]],
-            };
-        for id in ids {
+        for id in ahead(&self.browse) {
             self.fetch_lineup(id, cx);
         }
     }
@@ -396,6 +389,62 @@ impl Browser {
                 })),
         )
     }
+}
+
+/// The lineups the keys reach next: every stand spot of the selected landing and the first of
+/// the landings either side, or with nothing selected, the first of the first and last landings.
+fn ahead(browse: &Browse) -> Vec<LineupId> {
+    let landings = browse.landings();
+    let n = landings.len();
+    let selected = browse
+        .selected_landing()
+        .and_then(|g| landings.iter().position(|l| l.key == g.key));
+    match selected {
+        Some(at) => landings[at]
+            .lineups
+            .iter()
+            .copied()
+            .chain([
+                landings[(at + 1) % n].lineups[0],
+                landings[(at + n - 1) % n].lineups[0],
+            ])
+            .collect(),
+        None if n > 0 => vec![landings[0].lineups[0], landings[n - 1].lineups[0]],
+        None => Vec::new(),
+    }
+}
+
+/// The pictures the browser first shows when it opens at `start`, and those its keys reach
+/// next, to decode before it opens.
+pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
+    let browse = Browse::new(library, start);
+    let mut paths: Vec<PathBuf> = library
+        .agents()
+        .iter()
+        .map(|agent| library.portrait(&agent.id))
+        .collect();
+    if browse.chooser() == Some(arcwise_core::Chooser::Map) {
+        paths.extend(library.maps().iter().map(|map| library.map_card(&map.id)));
+    }
+    if let (Some(map), Some(agent)) = (browse.map(), browse.agent()) {
+        paths.push(library.map_card(map));
+        let side = browse.side();
+        paths.push(library.map_image(map, side));
+        if browse.side_count(library, side.other()) > 0 {
+            paths.push(library.map_image(map, side.other()));
+        }
+        if let Some(agent) = library.agent(agent) {
+            paths.extend(agent.abilities.iter().map(|ab| library.ability_icon(ab.id)));
+        }
+        for id in ahead(&browse) {
+            paths.extend([
+                library.start_still(id),
+                library.end_still(id),
+                library.aim_image(id),
+            ]);
+        }
+    }
+    paths.into_iter().map(|path| (path, Look::Plain)).collect()
 }
 
 /// `n word`, with an `s` unless `n` is 1.
