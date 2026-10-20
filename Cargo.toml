@@ -37,3 +37,8 @@ async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Release code with line tables, for sampling profilers: `cargo build --profile profiling`.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
