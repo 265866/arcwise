@@ -9,34 +9,69 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests share a group so a new push cancels the stale run; every commit on main gets
+  # its own run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Format, lint and test
-    runs-on: windows-latest
+  quick:
+    name: Quick checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2,typos@1.51.1
+
+      - name: Install actionlint
+        working-directory: ${{ runner.temp }}
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      # cargo-deny reads the full dependency graph, which includes Zed's git repository.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - run: cargo fmt --all -- --check
+      - run: typos
+      - run: actionlint
+      - run: cargo deny --locked check
+
+  windows:
+    name: Windows
+    runs-on: windows-2025
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       # The video tests decode a clip through Media Foundation, which Windows Server leaves out
-      # unless the feature is installed.
+      # unless the feature is installed. It takes about two minutes, so lints run first.
       - name: Install Media Foundation
         shell: pwsh
         run: |
           $feature = Get-WindowsFeature Server-Media-Foundation
           if (-not $feature.Installed) { Install-WindowsFeature Server-Media-Foundation | Format-List }
 
-      - name: Install the pinned toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-
-      - uses: Swatinem/rust-cache@v2
-
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all-targets --all-features
-      - run: cargo test --doc --all-features
+      - run: cargo test --locked --all-targets --all-features
+      - run: cargo test --locked --doc --all-features
