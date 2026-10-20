@@ -1,0 +1,117 @@
+name: Release
+
+# On every push to main, release-plz either releases (when the push is a merged release PR) or
+# opens and updates the release PR. A release is drafted with its tag, built from that tag,
+# attested, and published once its files are attached, so a published release always has them.
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Tag and draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - name: Release if this push merged the release PR
+        id: release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Every workspace crate shares the tag, so take it from the app package.
+      - name: Read the tag
+        id: tag
+        env:
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: echo "tag=$(jq -r '.[] | select(.package_name == "arcwise") | .tag' <<< "${RELEASES:-[]}")" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: release
+    if: needs.release.outputs.tag != ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-release.yml
+    with:
+      ref: ${{ needs.release.outputs.tag }}
+
+  publish:
+    name: Attest and publish
+    needs: [release, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: Attest the installer and zip
+        id: attest
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.exe
+            dist/*.zip
+
+      # The app's updater reads the attestation from the release instead of GitHub's API.
+      - name: Attach the files and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" dist/attestation.json
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+  release-pr:
+    name: Update the release PR
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-pr
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

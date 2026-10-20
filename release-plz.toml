@@ -1,0 +1,31 @@
+# release-plz keeps a release PR open that bumps the version and updates CHANGELOG.md from the
+# conventional commits on main. Merging that PR tags the release and drafts it on GitHub;
+# .github/workflows/release.yml then attaches the installer and publishes it.
+[workspace]
+# Versions come from v* tags, and nothing is published to crates.io.
+git_only = true
+semver_check = false
+# Before 1.0, a feat commit moves 0.1 to 0.2 rather than 0.1.0 to 0.1.1.
+features_always_increment_minor = true
+release_always = false
+pr_labels = ["release"]
+# The workspace shares one version and one tag; only the app package tags and releases it.
+git_tag_name = "v{{ version }}"
+git_tag_enable = false
+git_release_enable = false
+changelog_update = false
+
+[[package]]
+name = "arcwise"
+changelog_path = "./CHANGELOG.md"
+changelog_update = true
+changelog_include = ["arcwise-core", "arcwise-video"]
+git_tag_enable = true
+git_release_enable = true
+git_release_name = "Arcwise {{ version }}"
+# GitHub writes the notes: changes grouped by .github/release.yml, new contributors and a link to
+# the full diff.
+git_release_generate_notes = true
+git_release_body = ""
+# The release workflow publishes it once the installer is attached.
+git_release_draft = true
