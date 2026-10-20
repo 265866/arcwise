@@ -6,9 +6,9 @@ use gpui::{
     canvas, deferred, div, point, prelude::*, px, svg,
 };
 
-use super::{Browser, ChangeLibrary, SetBlur, SetBlurStrength};
+use super::{Browser, ChangeLibrary, SetAutoUpdate, SetBlur, SetBlurStrength};
 use crate::settings::Settings;
-use crate::{theme, ui};
+use crate::{theme, ui, update};
 
 /// A cog: teeth from a dashed ring, around a ring for the body.
 const GEAR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#000" stroke-width="3.5" stroke-dasharray="3.534 3.534"/><circle cx="12" cy="12" r="6" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
@@ -153,14 +153,57 @@ impl Browser {
                     })),
             )
             .when(blur, |menu| menu.child(self.strength_row(cx)))
+            .child(
+                row()
+                    .id("auto-update")
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::raised()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Automatic updates"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme::faint())
+                                    .child("Check for a new version when Arcwise opens"),
+                            ),
+                    )
+                    .child(switch(update::enabled()))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        let on = !update::enabled();
+                        update::set_enabled(on);
+                        cx.emit(SetAutoUpdate(on));
+                        cx.notify();
+                    })),
+            )
             .child(div().h(px(1.)).mx(px(10.)).bg(theme::line()))
-            .child(row().justify_end().child(self.reset_button(cx)))
+            .child(
+                row()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::faint())
+                            .child(concat!("Arcwise ", env!("CARGO_PKG_VERSION"))),
+                    )
+                    .child(self.reset_button(cx)),
+            )
     }
 
     /// Puts every setting but the library back as it first was. Dimmed while they already are.
     fn reset_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let defaults = Settings::default();
-        let changed = theme::blur() != defaults.blur || theme::strength() != defaults.blur_strength;
+        let changed = theme::blur() != defaults.blur
+            || theme::strength() != defaults.blur_strength
+            || update::enabled() != defaults.auto_update;
         if !changed {
             return ui::idle_button("reset-settings", "Reset to defaults");
         }
@@ -168,10 +211,12 @@ impl Browser {
             move |_, _, window, cx| {
                 theme::set_blur(defaults.blur);
                 theme::set_strength(defaults.blur_strength);
+                update::set_enabled(defaults.auto_update);
                 window.set_background_appearance(theme::window_background());
                 window.refresh();
                 cx.emit(SetBlur(defaults.blur));
                 cx.emit(SetBlurStrength(defaults.blur_strength));
+                cx.emit(SetAutoUpdate(defaults.auto_update));
             },
         ))
     }

@@ -14,7 +14,9 @@ use gpui::{
 use semver::Version;
 
 use crate::args::Args;
-use crate::browser::{self, Browser, ChangeLibrary, Chosen, SetBlur, SetBlurStrength};
+use crate::browser::{
+    self, Browser, ChangeLibrary, Chosen, SetAutoUpdate, SetBlur, SetBlurStrength,
+};
 use crate::images::{self, Picture};
 use crate::settings::{Last, Settings};
 use crate::update::{self, Outcome, Update};
@@ -179,6 +181,14 @@ impl Arcwise {
                     &browser,
                     |this, _, &SetBlurStrength(s): &SetBlurStrength, _| {
                         this.settings.blur_strength = s;
+                        this.save_settings();
+                    },
+                )
+                .detach();
+                cx.subscribe(
+                    &browser,
+                    |this, _, &SetAutoUpdate(on): &SetAutoUpdate, _| {
+                        this.settings.auto_update = on;
                         this.save_settings();
                     },
                 )
