@@ -79,21 +79,24 @@ same menu turns background blur on or off and sets how much of it shows.
 
 ## Updates
 
-When an installed Arcwise opens, it asks GitHub whether a newer release exists. If one does,
-Arcwise downloads its installer in the background and checks its attestation as
-`gh attestation verify` does. It also checks that the release workflow built that exact
-installer on `main`. A card then offers to restart into the new version now. Otherwise it
-installs when you close Arcwise. An installer that fails the check is deleted, and the card links
-to the releases page instead.
+When an installed Arcwise opens, it asks GitHub whether a newer release exists. With
+**Automatic updates** on in the settings menu, as they are at first, Arcwise downloads the new
+installer in the background and installs it when you close Arcwise. Before that, it checks the
+installer's attestation as `gh attestation verify` does, and that the release workflow built that
+exact installer on `main`. An installer that fails the check is deleted, and a message links to
+the releases page instead.
+
+With **Automatic updates** off, a message says a new version is available, and a badge shows on
+the settings gear. The bottom of the settings menu shows the version you have and the new one,
+with a button that updates Arcwise and relaunches it.
 
 An `arcwise.exe` run from the zip doesn't update itself. Get new versions from the
 [releases page](https://github.com/265866/arcwise/releases/latest).
 
-The check is one request to GitHub's API for the latest release. It names Arcwise and its version
-as the user agent and sends nothing else, though GitHub sees your IP address, as it does for any
-visit. Only when a newer version exists does Arcwise download its installer and attestation from
-the release. To turn updates off, open the settings menu and switch off **Automatic updates**.
-The bottom of the same menu shows which version you have.
+The check is one request to GitHub's API for the latest release, made whether automatic updates
+are on or off. It names Arcwise and its version as the user agent and sends nothing else, though
+GitHub sees your IP address, as it does for any visit. Arcwise downloads an installer and its
+attestation only to install a newer version.
 
 ## Requirements
 

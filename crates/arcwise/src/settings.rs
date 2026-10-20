@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use arcwise_core::{AgentId, MapId, Side};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::theme;
 
@@ -17,9 +17,10 @@ pub struct Settings {
     pub last: Option<Last>,
     /// Whether the window shows what is behind it, blurred.
     pub blur: bool,
-    /// How much of the blur shows, from 0 to 1; see [`theme::strength`].
-    pub blur_strength: f32,
-    /// Whether Arcwise updates itself; see [`crate::update`].
+    /// How much of the blur shows, from 0 to 100; see [`theme::strength`].
+    #[serde(deserialize_with = "strength")]
+    pub blur_strength: u8,
+    /// Whether Arcwise updates itself; see [`crate::updater`].
     pub auto_update: bool,
 }
 
@@ -40,6 +41,20 @@ pub struct Last {
     pub map: MapId,
     pub agent: AgentId,
     pub side: Side,
+}
+
+/// Reads the blur strength. Arcwise 0.2 and earlier saved it from 0 to 1, as a decimal such as
+/// 0.55, which serde_json keeps apart from a whole number such as 55. A decimal above 1, such as
+/// a hand-edited 55.0, is already from 0 to 100.
+fn strength<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let number = serde_json::Number::deserialize(deserializer)?;
+    let value = number.as_f64().unwrap_or(0.);
+    let percent = if number.is_f64() && value <= 1. {
+        value * 100.
+    } else {
+        value
+    };
+    Ok(percent.clamp(0., 100.).round() as u8)
 }
 
 impl Settings {
@@ -92,7 +107,7 @@ mod tests {
                 side: Side::Defense,
             }),
             blur: false,
-            blur_strength: 0.3,
+            blur_strength: 30,
             auto_update: false,
         };
         settings.write(&path).unwrap();
@@ -110,9 +125,33 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_strength_older_versions_saved_from_0_to_1() {
+        let read = |json: &str| {
+            serde_json::from_str::<Settings>(json)
+                .unwrap()
+                .blur_strength
+        };
+        assert_eq!(read(r#"{"blur_strength": 0.55}"#), 55);
+        assert_eq!(read(r#"{"blur_strength": 1.0}"#), 100);
+        assert_eq!(read(r#"{"blur_strength": 0.0}"#), 0);
+        assert_eq!(
+            read(r#"{"blur_strength": 1}"#),
+            1,
+            "a whole number is already 0 to 100"
+        );
+        assert_eq!(read(r#"{"blur_strength": 250}"#), 100);
+        assert_eq!(
+            read(r#"{"blur_strength": 55.0}"#),
+            55,
+            "a decimal above 1 is already 0 to 100"
+        );
+        assert_eq!(read(r#"{"blur_strength": -0.5}"#), 0);
+    }
+
+    #[test]
     fn settings_saved_before_updates_existed_turn_them_on() {
         let settings: Settings =
-            serde_json::from_str(r#"{"blur": false, "blur_strength": 0.3}"#).unwrap();
+            serde_json::from_str(r#"{"blur": false, "blur_strength": 30}"#).unwrap();
         assert!(!settings.blur);
         assert!(settings.auto_update);
     }

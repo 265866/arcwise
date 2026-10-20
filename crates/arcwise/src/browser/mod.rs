@@ -30,6 +30,7 @@ use crate::drawn::Drawn;
 use crate::images::{Image, Images, Look, Picture};
 use crate::player::Player;
 use crate::ui;
+use crate::updater::Updater;
 use follow::Follow;
 use part::Part;
 use slide::Slide;
@@ -60,6 +61,8 @@ pub struct Browser {
     lightbox: Option<PathBuf>,
     /// Whether the settings menu is open.
     menu_open: bool,
+    /// What the settings menu says about updates.
+    updater: Entity<Updater>,
     /// Whether the pointer is dragging along the blur strength track.
     strength_drag: bool,
     slide: Slide,
@@ -108,14 +111,14 @@ pub struct SetBlur(pub bool);
 
 impl EventEmitter<SetBlur> for Browser {}
 
-/// Emitted when the user lets go of the blur strength track, with where it stopped.
+/// Emitted when the user lets go of the blur strength track, with where it stopped, from 0 to
+/// 100.
 #[derive(Clone, Copy, Debug)]
-pub struct SetBlurStrength(pub f32);
+pub struct SetBlurStrength(pub u8);
 
 impl EventEmitter<SetBlurStrength> for Browser {}
 
-/// Emitted when the user turns automatic updates on or off, which [`crate::update::enabled`]
-/// already shows.
+/// Emitted when the user turns automatic updates on or off, which the [`Updater`] already knows.
 #[derive(Clone, Copy, Debug)]
 pub struct SetAutoUpdate(pub bool);
 
@@ -127,8 +130,10 @@ impl Browser {
         library: Arc<Library>,
         start: Start,
         pictures: Vec<Picture>,
+        updater: Entity<Updater>,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.observe(&updater, |_, _, cx| cx.notify()).detach();
         let images = cx.new(|_| {
             let mut images = Images::default();
             images.seed(pictures);
@@ -148,6 +153,7 @@ impl Browser {
             player: cx.new(|_| Player::new()),
             lightbox: None,
             menu_open: false,
+            updater,
             strength_drag: false,
             slide: Slide::closed(),
             shown: None,

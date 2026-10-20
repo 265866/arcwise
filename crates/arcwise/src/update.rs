@@ -1,14 +1,12 @@
-//! Keeps Arcwise up to date. When an installed Arcwise opens, it asks GitHub for the latest
-//! release, downloads a newer installer, and checks the installer's attestation: that this
-//! repository's release workflow built it on GitHub's own runners. The installer then runs
-//! silently when Arcwise closes, or straight away when asked to restart.
+//! Finds, downloads and checks updates. [`latest`] asks GitHub for the latest release. [`fetch`]
+//! downloads a release's installer and checks its attestation: that this repository's release
+//! workflow built it on GitHub's own runners. [`crate::updater`] decides when each runs.
 
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as _, bail, ensure};
@@ -46,17 +44,6 @@ pub const RELEASE_BUILDER: Builder = Builder {
 
 const GITHUB_ACTIONS: &str = "https://token.actions.githubusercontent.com";
 
-static ENABLED: AtomicBool = AtomicBool::new(true);
-
-/// Whether Arcwise looks for updates when it opens, and installs one it found when it closes.
-pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
-}
-
-pub fn set_enabled(on: bool) {
-    ENABLED.store(on, Ordering::Relaxed);
-}
-
 pub fn current_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("the package version is semver")
 }
@@ -81,12 +68,9 @@ pub struct Update {
 
 #[derive(Debug)]
 pub enum Outcome {
-    UpToDate,
     Ready(Update),
-    /// A newer release exists, but its installer could not be shown to come from the release
-    /// workflow, so it was deleted.
+    /// The installer could not be shown to come from the release workflow, so it was deleted.
     Unverified {
-        version: Version,
         reason: String,
     },
 }
@@ -96,24 +80,27 @@ pub fn directory() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|dir| Path::new(&dir).join("Arcwise").join("updates"))
 }
 
-/// Looks for a release newer than `current` and downloads its installer into `dir`. Blocks on
-/// the network, so it runs off the UI thread. An error means the check could not finish, such as
-/// when offline or while a release is still getting its files, and is not worth showing.
-pub fn check(current: &Version, dir: &Path) -> anyhow::Result<Outcome> {
-    let agent = agent(current);
-    let latest: Release = match agent.get(LATEST_RELEASE).call() {
+/// Asks GitHub for the latest release and returns its version when it is newer than `current`.
+/// Installers left in `dir` by earlier runs, such as one already installed, are deleted. Blocks
+/// on the network, so it runs off the UI thread.
+pub fn latest(current: &Version, dir: &Path) -> anyhow::Result<Option<Version>> {
+    let release: Release = match agent(current).get(LATEST_RELEASE).call() {
         Ok(mut response) => serde_json::from_slice(&response.body_mut().read_to_vec()?)
             .context("reading the latest release")?,
         // No release has been published yet.
-        Err(ureq::Error::StatusCode(404)) => return Ok(Outcome::UpToDate),
+        Err(ureq::Error::StatusCode(404)) => return Ok(None),
         Err(e) => return Err(e).context("asking GitHub for the latest release"),
     };
-    // Installers from earlier checks, such as one already installed, are no longer needed.
     clear(dir);
-    let Some(version) = newer(current, &latest) else {
-        return Ok(Outcome::UpToDate);
-    };
-    let name = installer_name(&version);
+    Ok(newer(current, &release))
+}
+
+/// Downloads `version`'s installer into `dir` and checks its attestation. Blocks on the network,
+/// so it runs off the UI thread. An error means the download could not finish, such as when
+/// offline or while the release is still getting its files.
+pub fn fetch(version: &Version, dir: &Path) -> anyhow::Result<Outcome> {
+    let agent = agent(&current_version());
+    let name = installer_name(version);
     let url = |file: &str| format!("{DOWNLOADS}/v{version}/{file}");
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     // Named for this process, so a second Arcwise checking at the same time has its own file.
@@ -137,9 +124,11 @@ pub fn check(current: &Version, dir: &Path) -> anyhow::Result<Outcome> {
         let _ = std::fs::remove_file(&installer);
     }
     match checked? {
-        Ok(()) => Ok(Outcome::Ready(Update { version, installer })),
+        Ok(()) => Ok(Outcome::Ready(Update {
+            version: version.clone(),
+            installer,
+        })),
         Err(e) => Ok(Outcome::Unverified {
-            version,
             reason: format!("{e:#}"),
         }),
     }
