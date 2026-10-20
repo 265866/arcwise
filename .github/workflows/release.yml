@@ -1,8 +1,9 @@
 name: Release
 
-# On every push to main, release-plz either releases (when the push is a merged release PR) or
-# opens and updates the release PR. A release is drafted with its tag, built from that tag,
-# attested, and published once its files are attached, so a published release always has them.
+# On every push to main, release-plz either tags a release (when the push is a merged release PR)
+# or opens and updates the release PR. A tagged release is built from its tag, attested, and only
+# then published on GitHub with its files, so a published release always has them. If building or
+# publishing fails, re-running the failed jobs picks up from the same tag.
 on:
   push:
     branches: [main]
@@ -14,7 +15,7 @@ env:
 
 jobs:
   release:
-    name: Tag and draft
+    name: Tag
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -31,11 +32,12 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
 
-      - name: Release if this push merged the release PR
+      - name: Tag if this push merged the release PR
         id: release-plz
         uses: release-plz/action@v0.5
         with:
           command: release
+          version: 0.3.173
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -44,7 +46,13 @@ jobs:
         id: tag
         env:
           RELEASES: ${{ steps.release-plz.outputs.releases }}
-        run: echo "tag=$(jq -r '.[] | select(.package_name == "arcwise") | .tag' <<< "${RELEASES:-[]}")" >> "$GITHUB_OUTPUT"
+        run: |
+          tag=$(jq -r '.[] | select(.package_name == "arcwise") | .tag' <<< "${RELEASES:-[]}")
+          if [ -z "$tag" ] && [ "$(jq length <<< "${RELEASES:-[]}")" -gt 0 ]; then
+            echo "::error::release-plz released packages but not arcwise: $RELEASES"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build
@@ -79,16 +87,24 @@ jobs:
             dist/*.exe
             dist/*.zip
 
-      # The app's updater reads the attestation from the release instead of GitHub's API.
-      - name: Attach the files and publish
+      # The app's updater reads the attestation from the release instead of GitHub's API. gh keeps
+      # a new release a draft until its files are uploaded. The notes are GitHub's, grouped by
+      # .github/release.yml.
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: |
           cp "$BUNDLE" dist/attestation.json
-          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # A draft survives only if a run was killed mid-upload; gh deletes it on a failed one.
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          else
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Arcwise ${TAG#v}" --generate-notes --latest
+          fi
 
   release-pr:
     name: Update the release PR
@@ -113,5 +129,6 @@ jobs:
       - uses: release-plz/action@v0.5
         with:
           command: release-pr
+          version: 0.3.173
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
