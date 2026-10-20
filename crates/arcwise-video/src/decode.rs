@@ -457,29 +457,39 @@ impl Clip<'_> {
         }
     }
 
-    /// Waits for the player to take `frame`, preparing clips meanwhile when asked to. Returns
-    /// why the clip ended, if it did.
+    /// Waits for the player to take `frame`, answering commands meanwhile. Returns why the clip
+    /// ended, if it did. A request to prepare waits until the frame is sent: preparing takes
+    /// longer than a frame, and the first frame of a clip just opened must not wait for it.
     fn send(&mut self, frame: Frame) -> windows::core::Result<Option<Ended>> {
         let mut frame = Some(frame);
-        loop {
+        let mut prepare = None;
+        let ended = loop {
             let mut select = Select::new();
             let send = select.send(self.frames);
             select.recv(self.commands);
             let operation = select.select();
             if operation.index() == send {
                 let frame = frame.take().expect("a frame is sent once");
-                return Ok(operation
+                break operation
                     .send(self.frames, frame)
                     .err()
-                    .map(|_| Ended::Dropped));
+                    .map(|_| Ended::Dropped);
             }
-            let Ok(command) = operation.recv(self.commands) else {
-                return Ok(Some(Ended::Dropped));
-            };
-            if let Some(command) = self.answer(command)? {
-                return Ok(Some(Ended::Command(command)));
+            match operation.recv(self.commands) {
+                Ok(command) => match latest(self.commands, command) {
+                    command @ Command::Prepare { .. } => prepare = Some(command),
+                    command => break Some(Ended::Command(command)),
+                },
+                Err(_) => break Some(Ended::Dropped),
             }
+        };
+        if ended.is_none()
+            && let Some(command) = prepare
+            && let Some(command) = self.answer(command)?
+        {
+            return Ok(Some(Ended::Command(command)));
         }
+        Ok(ended)
     }
 
     /// Prepares a clip when asked to, between frames of this one, and hands back any other
