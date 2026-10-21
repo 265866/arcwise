@@ -17,6 +17,7 @@ actions!(
         ShowAim,
         ShowLanding,
         TogglePause,
+        RestartClip,
         SlowMotion,
         SwitchSide,
         Close,
@@ -38,6 +39,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("e", ShowAim, context),
         KeyBinding::new("r", ShowLanding, context),
         KeyBinding::new("space", TogglePause, context),
+        KeyBinding::new("backspace", RestartClip, context),
         KeyBinding::new("s", SlowMotion, context),
         KeyBinding::new("tab", SwitchSide, context),
         KeyBinding::new("escape", Close, context),
@@ -124,6 +126,14 @@ impl Browser {
     pub(super) fn toggle_pause(&mut self, _: &TogglePause, _: &mut Window, cx: &mut Context<Self>) {
         if self.keys_reach_map() && self.browse.selected_lineup().is_some() {
             self.player.update(cx, |player, cx| player.toggle_pause(cx));
+        }
+    }
+
+    /// Plays the selected lineup's clip again from the start, showing it if another view was.
+    pub(super) fn restart_clip(&mut self, _: &RestartClip, _: &mut Window, cx: &mut Context<Self>) {
+        if self.keys_reach_map() && self.browse.selected_lineup().is_some() {
+            self.show(View::Clip, cx);
+            self.player.update(cx, |player, cx| player.restart(cx));
         }
     }
 

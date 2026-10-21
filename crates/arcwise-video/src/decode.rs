@@ -66,7 +66,8 @@ fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<
     let mut next = commands.recv().ok();
     while let Some(command) = next.take() {
         next = match latest(commands, command) {
-            Command::Stop => commands.recv().ok(),
+            // A seek with no clip playing: it stopped, or failed to open.
+            Command::Stop | Command::Seek { .. } => commands.recv().ok(),
             Command::Prepare { path, max_height } => {
                 ready = match prepare(device.as_mut(), path, max_height) {
                     Ok(prepared) => Some(prepared),
@@ -90,6 +91,7 @@ fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<
                     generation,
                     device: device.as_mut(),
                     ready: &mut ready,
+                    waiting: None,
                     commands,
                     frames,
                     events,
@@ -98,7 +100,8 @@ fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<
                     Ok(command) => command,
                     Err(e) => {
                         let _ = events.send(Event::Failed {
-                            generation,
+                            // A seek moves the clip on to a newer generation.
+                            generation: clip.generation,
                             error: format!("{}: {}", path.display(), e.message()),
                             codec_missing: e.code() == MF_E_TOPO_CODEC_NOT_FOUND,
                         });
@@ -111,11 +114,13 @@ fn decode(commands: &Receiver<Command>, frames: &Sender<Frame>, events: &Sender<
     }
 }
 
-/// Skips requests to prepare that newer commands have overtaken: only the latest prepare
-/// counts, and an open or stop queued behind it wins.
+/// Skips requests to prepare that newer commands have overtaken, with no clip playing: only
+/// the latest prepare counts, an open or stop queued behind it wins, and a seek, which has
+/// nothing to move, is passed over.
 fn latest(commands: &Receiver<Command>, mut command: Command) -> Command {
     while matches!(command, Command::Prepare { .. }) {
         match commands.try_recv() {
+            Ok(Command::Seek { .. }) => {}
             Ok(newer) => command = newer,
             Err(_) => break,
         }
@@ -358,6 +363,19 @@ fn presentation_time(timestamp: i64) -> Duration {
     Duration::from_nanos(timestamp.max(0) as u64 * 100)
 }
 
+/// Whether `sample`, which starts at `start`, is over before `position`.
+fn ends_before(sample: &IMFSample, start: Duration, position: Duration) -> bool {
+    // SAFETY: reads a property of a sample the reader returned.
+    let length = unsafe { sample.GetSampleDuration() }
+        .map(presentation_time)
+        .unwrap_or_default();
+    if length.is_zero() {
+        start < position
+    } else {
+        start + length <= position
+    }
+}
+
 fn pixels(
     device: Option<&mut Device>,
     sample: &IMFSample,
@@ -378,6 +396,8 @@ struct Clip<'a> {
     device: Option<&'a mut Device>,
     /// Where a clip prepared while this one plays is kept.
     ready: &'a mut Option<Prepared>,
+    /// A clip asked to be prepared, the clip and size, and since when it waits.
+    waiting: Option<(PathBuf, Option<u32>, Instant)>,
     commands: &'a Receiver<Command>,
     frames: &'a Sender<Frame>,
     events: &'a Sender<Event>,
@@ -418,17 +438,42 @@ impl Clip<'_> {
         };
         let mut loop_offset = Duration::ZERO;
         let mut empty_loops = 0;
+        // After a seek, where the next frame to send must still be showing. The reader can only
+        // start at a key frame, so frames before then are decoded and dropped, not copied back.
+        let mut skip_to: Option<Duration> = None;
         loop {
-            match self.send(frame)? {
-                Some(Ended::Command(command)) => return Ok(Some(command)),
+            let mut command = match self.send(frame)? {
+                Some(Ended::Command(command)) => Some(command),
                 Some(Ended::Dropped) => return Ok(None),
-                None => {}
-            }
+                None => None,
+            };
             frame = loop {
-                if let Some(command) = self.commands.try_recv().ok()
-                    && let Some(command) = self.answer(command)?
-                {
-                    return Ok(Some(command));
+                if command.is_none() {
+                    // A prepare waits while a seek skips ahead, so the seek's frame goes first;
+                    // another seek, an open or a stop cuts the skip short.
+                    command = match skip_to {
+                        None => self.answer()?,
+                        Some(_) => self.commands.try_recv().ok().and_then(|c| self.wait(c)),
+                    };
+                }
+                match command.take() {
+                    Some(Command::Seek {
+                        generation,
+                        position,
+                    }) => {
+                        self.generation = generation;
+                        loop_offset = Duration::ZERO;
+                        empty_loops = 0;
+                        set_position(&reader, position)?;
+                        skip_to = Some(position);
+                        // Like a clip just opened, its first frame goes before a prepare.
+                        if let Some((.., since)) = &mut self.waiting {
+                            *since = Instant::now();
+                        }
+                        continue;
+                    }
+                    Some(other) => return Ok(Some(other)),
+                    None => {}
                 }
                 let (flags, timestamp, sample) = read(&reader)?;
                 if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
@@ -440,6 +485,9 @@ impl Clip<'_> {
                             "the clip has no frames",
                         ));
                     }
+                    // A seek past the last frame, as when the reported duration overstates the
+                    // stream, shows the first.
+                    skip_to = None;
                     loop_offset += duration;
                     rewind(&reader)?;
                     continue;
@@ -450,9 +498,14 @@ impl Clip<'_> {
                 }
                 let Some(sample) = sample else { continue };
                 empty_loops = 0;
+                let start = presentation_time(timestamp);
+                if skip_to.is_some_and(|position| ends_before(&sample, start, position)) {
+                    continue;
+                }
+                skip_to = None;
                 break Frame {
                     generation: self.generation,
-                    pts: loop_offset + presentation_time(timestamp),
+                    pts: loop_offset + start,
                     width,
                     height,
                     bgra: pixels(self.device.as_deref_mut(), &sample, width, height)?,
@@ -467,19 +520,20 @@ impl Clip<'_> {
     /// behind a prepare. A paused or hidden clip sends none, so the prepare goes ahead then.
     fn send(&mut self, frame: Frame) -> windows::core::Result<Option<Ended>> {
         let mut frame = Some(frame);
-        let mut prepare: Option<(Command, Instant)> = None;
         loop {
             let mut select = Select::new();
             let send = select.send(self.frames);
             select.recv(self.commands);
-            let deadline = prepare.as_ref().map(|(_, since)| *since + PREPARE_WAIT);
+            let deadline = self
+                .waiting
+                .as_ref()
+                .map(|(.., since)| *since + PREPARE_WAIT);
             let operation = match deadline {
                 None => select.select(),
                 Some(deadline) => match select.select_deadline(deadline) {
                     Ok(operation) => operation,
                     Err(_) => {
-                        let (command, _) = prepare.take().expect("a prepare is waiting");
-                        if let Some(command) = self.answer(command)? {
+                        if let Some(command) = self.answer()? {
                             return Ok(Some(Ended::Command(command)));
                         }
                         continue;
@@ -491,32 +545,44 @@ impl Clip<'_> {
                 if operation.send(self.frames, frame).is_err() {
                     return Ok(Some(Ended::Dropped));
                 }
-                if let Some((command, _)) = prepare
-                    && let Some(command) = self.answer(command)?
-                {
-                    return Ok(Some(Ended::Command(command)));
-                }
-                return Ok(None);
+                return Ok(self.answer()?.map(Ended::Command));
             }
             match operation.recv(self.commands) {
-                Ok(command) => match latest(self.commands, command) {
-                    command @ Command::Prepare { .. } => {
-                        let since = prepare.map_or_else(Instant::now, |(_, since)| since);
-                        prepare = Some((command, since));
+                Ok(command) => {
+                    if let Some(command) = self.wait(command) {
+                        return Ok(Some(Ended::Command(command)));
                     }
-                    command => return Ok(Some(Ended::Command(command))),
-                },
+                }
                 Err(_) => return Ok(Some(Ended::Dropped)),
             }
         }
     }
 
-    /// Prepares a clip when asked to, between frames of this one, and hands back any other
-    /// command.
-    fn answer(&mut self, command: Command) -> windows::core::Result<Option<Command>> {
-        let (path, max_height) = match latest(self.commands, command) {
-            Command::Prepare { path, max_height } => (path, max_height),
-            other => return Ok(Some(other)),
+    /// Keeps a request to prepare for later, in place of any before it, and hands back any
+    /// other command. The request outlives a seek, which keeps this clip playing, but not an
+    /// open or stop, which end it.
+    fn wait(&mut self, command: Command) -> Option<Command> {
+        let Command::Prepare { path, max_height } = command else {
+            return Some(command);
+        };
+        let since = self
+            .waiting
+            .take()
+            .map_or_else(Instant::now, |(.., since)| since);
+        self.waiting = Some((path, max_height, since));
+        None
+    }
+
+    /// Prepares the clip waiting to be, between frames of this one, unless a command queued
+    /// meanwhile comes first, which it hands back.
+    fn answer(&mut self) -> windows::core::Result<Option<Command>> {
+        while let Ok(command) = self.commands.try_recv() {
+            if let Some(command) = self.wait(command) {
+                return Ok(Some(command));
+            }
+        }
+        let Some((path, max_height, _)) = self.waiting.take() else {
+            return Ok(None);
         };
         *self.ready = match prepare(self.device.as_deref_mut(), path, max_height) {
             Ok(prepared) => Some(prepared),
@@ -589,12 +655,19 @@ fn output_format(reader: &IMFSourceReader) -> windows::core::Result<(u32, u32, D
 }
 
 fn rewind(reader: &IMFSourceReader) -> windows::core::Result<()> {
-    let mut start = PROPVARIANT::default();
-    // SAFETY: a zeroed PROPVARIANT tagged VT_I8 is position zero, which is what
+    set_position(reader, Duration::ZERO)
+}
+
+/// Moves the reader to the key frame at or before `position`.
+fn set_position(reader: &IMFSourceReader, position: Duration) -> windows::core::Result<()> {
+    let ticks = i64::try_from(position.as_nanos() / 100).unwrap_or(i64::MAX);
+    let mut at = PROPVARIANT::default();
+    // SAFETY: a PROPVARIANT tagged VT_I8 holding a time in 100 ns units, which is what
     // SetCurrentPosition expects with the null time format.
     unsafe {
-        (*start.Anonymous.Anonymous).vt = VT_I8;
-        reader.SetCurrentPosition(&GUID::zeroed(), &start)
+        (*at.Anonymous.Anonymous).vt = VT_I8;
+        (*at.Anonymous.Anonymous).Anonymous.hVal = ticks;
+        reader.SetCurrentPosition(&GUID::zeroed(), &at)
     }
 }
 

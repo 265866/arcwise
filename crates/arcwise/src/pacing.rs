@@ -57,6 +57,9 @@ enum State {
     Running { anchor: Instant, media: Duration },
     /// Stopped at a media time.
     Held(Duration),
+    /// Moved by a seek: the next frame shows, and the clock starts there, or stays held there
+    /// if held.
+    Seeking { held: bool },
 }
 
 #[derive(Debug)]
@@ -84,6 +87,16 @@ impl<F: Timed> Pacing<F> {
         self.next = None;
     }
 
+    /// Starts over from the next frame, after a seek, and stays held if it was.
+    pub fn seek(&mut self) {
+        self.state = match self.state {
+            State::Waiting { held } | State::Seeking { held } => State::Seeking { held },
+            State::Running { .. } => State::Seeking { held: false },
+            State::Held(_) => State::Seeking { held: true },
+        };
+        self.next = None;
+    }
+
     pub fn speed(&self) -> Speed {
         self.speed
     }
@@ -95,6 +108,7 @@ impl<F: Timed> Pacing<F> {
         self.speed = speed;
     }
 
+    /// Whether no frame is coming until the clock is released. A seek still takes one.
     pub fn is_held(&self) -> bool {
         matches!(self.state, State::Waiting { held: true } | State::Held(_))
     }
@@ -103,6 +117,7 @@ impl<F: Timed> Pacing<F> {
     pub fn hold(&mut self, now: Instant) {
         self.state = match self.state {
             State::Waiting { .. } => State::Waiting { held: true },
+            State::Seeking { .. } => State::Seeking { held: true },
             State::Running { .. } => State::Held(self.media_now(now).unwrap_or_default()),
             held @ State::Held(_) => held,
         };
@@ -112,6 +127,7 @@ impl<F: Timed> Pacing<F> {
     pub fn release(&mut self, now: Instant) {
         self.state = match self.state {
             State::Waiting { .. } => State::Waiting { held: false },
+            State::Seeking { .. } => State::Seeking { held: false },
             State::Held(media) => State::Running { anchor: now, media },
             running @ State::Running { .. } => running,
         };
@@ -147,7 +163,9 @@ impl<F: Timed> Pacing<F> {
     /// Whether a new frame should be shown now. `pull` takes the next frame from the decoder.
     pub fn due(&mut self, now: Instant, mut pull: impl FnMut() -> Option<F>) -> bool {
         match self.state {
-            State::Waiting { held: false } => self.peek(&mut pull).is_some(),
+            State::Waiting { held: false } | State::Seeking { .. } => {
+                self.peek(&mut pull).is_some()
+            }
             State::Running { .. } => {
                 let media = self.running_media(now);
                 self.peek(&mut pull)
@@ -158,13 +176,17 @@ impl<F: Timed> Pacing<F> {
     }
 
     /// The frame to show now, if it changed: the newest the clock has reached, dropping any it
-    /// overtook. The first frame of a clip shows as soon as it exists and starts the clock.
+    /// overtook. The first frame of a clip, or after a seek, shows as soon as it exists and
+    /// starts the clock, or holds it there after a seek while held.
     pub fn advance(&mut self, now: Instant, mut pull: impl FnMut() -> Option<F>) -> Option<F> {
-        if self.state == (State::Waiting { held: false }) {
-            let frame = self.peek(&mut pull)?;
-            self.state = State::Running {
-                anchor: now,
-                media: frame.pts(),
+        if matches!(
+            self.state,
+            State::Waiting { held: false } | State::Seeking { .. }
+        ) {
+            let media = self.peek(&mut pull)?.pts();
+            self.state = match self.state {
+                State::Seeking { held: true } => State::Held(media),
+                _ => State::Running { anchor: now, media },
             };
             return self.next.take();
         }
@@ -298,5 +320,66 @@ mod tests {
         assert_eq!(pacing.speed(), Speed::Half, "the speed carries over");
         let mut next_clip = VecDeque::from([F(0)]);
         assert_eq!(pacing.advance(t0, || next_clip.pop_front()), Some(F(0)));
+    }
+
+    #[test]
+    fn a_seek_while_playing_starts_the_clock_at_the_next_frame() {
+        let mut frames = decoder();
+        let mut pacing = Pacing::default();
+        let t0 = Instant::now();
+        pacing.advance(t0, || frames.pop_front());
+        pacing.advance(t0 + ms(250), || frames.pop_front());
+        pacing.seek();
+        assert_eq!(
+            pacing.media_now(t0 + ms(300)),
+            None,
+            "no frame from after the seek yet"
+        );
+        let mut after = VecDeque::from([F(700), F(800)]);
+        assert_eq!(
+            pacing.advance(t0 + ms(300), || after.pop_front()),
+            Some(F(700)),
+            "the frame held back from before the seek is dropped"
+        );
+        assert_eq!(pacing.media_now(t0 + ms(350)), Some(ms(750)));
+        assert!(!pacing.is_held());
+    }
+
+    #[test]
+    fn a_seek_while_paused_shows_that_frame_and_stays_paused() {
+        let mut frames = decoder();
+        let mut pacing = Pacing::default();
+        let t0 = Instant::now();
+        pacing.advance(t0, || frames.pop_front());
+        pacing.hold(t0 + ms(150));
+        pacing.seek();
+        assert!(!pacing.is_held(), "still takes the frame it was moved to");
+        let mut after = VecDeque::from([F(600), F(700)]);
+        assert_eq!(
+            pacing.advance(t0 + ms(500), || after.pop_front()),
+            Some(F(600))
+        );
+        assert!(pacing.is_held());
+        assert_eq!(pacing.media_now(t0 + ms(900)), Some(ms(600)));
+        assert_eq!(pacing.advance(t0 + ms(900), || after.pop_front()), None);
+        pacing.release(t0 + ms(1000));
+        assert_eq!(pacing.media_now(t0 + ms(1100)), Some(ms(700)));
+    }
+
+    #[test]
+    fn a_pause_just_after_a_seek_shows_the_frame_it_moved_to() {
+        let mut frames = decoder();
+        let mut pacing = Pacing::default();
+        let t0 = Instant::now();
+        pacing.advance(t0, || frames.pop_front());
+        pacing.seek();
+        pacing.hold(t0 + ms(50));
+        let mut after = VecDeque::from([F(600), F(700)]);
+        assert_eq!(
+            pacing.advance(t0 + ms(100), || after.pop_front()),
+            Some(F(600))
+        );
+        assert!(pacing.is_held());
+        assert_eq!(pacing.media_now(t0 + ms(900)), Some(ms(600)));
     }
 }

@@ -455,6 +455,7 @@ impl Render for Browser {
             .on_action(cx.listener(Self::show_aim))
             .on_action(cx.listener(Self::show_landing))
             .on_action(cx.listener(Self::toggle_pause))
+            .on_action(cx.listener(Self::restart_clip))
             .on_action(cx.listener(Self::slow_motion))
             .on_action(cx.listener(Self::switch_side))
             .on_action(cx.listener(Self::close))

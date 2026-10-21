@@ -580,6 +580,7 @@ fn keys() -> Div {
         .child(hint(&["↑", "↓"], "landing"))
         .child(hint(&["←", "→"], "throw from"))
         .child(hint(&["Space"], "pause"))
+        .child(hint(&["Backspace"], "restart"))
         .child(hint(&["S"], "slow-mo"))
         .child(hint(&["Tab"], "side"))
         .child(hint(&["Esc"], "close"))

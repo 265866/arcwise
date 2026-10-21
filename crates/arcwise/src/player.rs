@@ -1,15 +1,17 @@
 //! Plays the selected lineup's clip: takes frames from the decode thread and shows each when
 //! its time comes.
 
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arcwise_core::LineupId;
 use arcwise_video::{Decoder, Event, Frame};
 use gpui::{
-    App, Context, FontWeight, IntoElement, MouseButton, RenderImage, SharedString, Window, div,
-    prelude::*, px,
+    App, Bounds, Context, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels,
+    RenderImage, SharedString, Window, div, prelude::*, px,
 };
 
 use crate::pacing::{Pacing, Speed};
@@ -18,6 +20,9 @@ use crate::{theme, ui};
 pub struct Player {
     decoder: Result<Decoder, SharedString>,
     generation: u64,
+    /// The generation the clip opened with. Seeks count on from it, and a failure reported for
+    /// any generation since is this clip's, even one from before a seek the player has not read.
+    opened_as: u64,
     clip: Option<LineupId>,
     shown: Option<Arc<RenderImage>>,
     pacing: Pacing<Frame>,
@@ -32,6 +37,12 @@ pub struct Player {
     ticking: bool,
     /// When the clip was asked for, until its first frame shows.
     opened: Option<Instant>,
+    /// Where a seek went, until a frame from there shows.
+    seeking: Option<Duration>,
+    /// Where the progress bar is, to turn a click on it into a place in the clip.
+    bar: Rc<Cell<Bounds<Pixels>>>,
+    /// The pointer is over the progress bar, which then thickens.
+    over_bar: bool,
 }
 
 impl Player {
@@ -39,6 +50,7 @@ impl Player {
         Player {
             decoder: Decoder::spawn().map_err(|e| format!("Could not start video: {e}").into()),
             generation: 0,
+            opened_as: 0,
             clip: None,
             shown: None,
             pacing: Pacing::default(),
@@ -49,6 +61,9 @@ impl Player {
             retired: Vec::new(),
             ticking: false,
             opened: None,
+            seeking: None,
+            bar: Rc::default(),
+            over_bar: false,
         }
     }
 
@@ -59,6 +74,7 @@ impl Player {
             return;
         }
         self.reset();
+        self.opened_as = self.generation;
         self.clip = Some(id);
         self.opened = Some(Instant::now());
         match &self.decoder {
@@ -99,6 +115,7 @@ impl Player {
         self.paused = false;
         self.failed = None;
         self.opened = None;
+        self.seeking = None;
         self.retired.extend(self.shown.take());
     }
 
@@ -113,6 +130,30 @@ impl Player {
             self.update_hold();
             cx.notify();
         }
+    }
+
+    /// Plays the clip from `fraction` of the way through, or shows that frame if paused.
+    pub fn seek(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        let (Ok(decoder), Some(duration), None) = (&self.decoder, self.duration, &self.failed)
+        else {
+            return;
+        };
+        // Short of the end, which has no frame of its own to show.
+        let position = duration
+            .mul_f32(fraction.clamp(0., 1.))
+            .min(duration.saturating_sub(Duration::from_millis(1)));
+        self.generation += 1;
+        self.seeking = Some(position);
+        self.pacing.seek();
+        decoder.seek(self.generation, position);
+        cx.notify();
+    }
+
+    /// Plays the clip again from the start.
+    pub fn restart(&mut self, cx: &mut Context<Self>) {
+        self.paused = false;
+        self.update_hold();
+        self.seek(0., cx);
     }
 
     /// Holds the clip still while the viewer shows something else, so frames are not decoded
@@ -169,7 +210,7 @@ impl Player {
                     generation,
                     error,
                     codec_missing,
-                } if generation == self.generation => {
+                } if (self.opened_as..=self.generation).contains(&generation) => {
                     self.failed = Some(if codec_missing {
                         "Windows has no decoder for this clip. AV1 clips need the AV1 Video \
                          Extension from the Microsoft Store."
@@ -215,7 +256,7 @@ impl Player {
     }
 
     fn progress(&self, now: Instant) -> f32 {
-        match (self.pacing.media_now(now), self.duration) {
+        match (self.pacing.media_now(now).or(self.seeking), self.duration) {
             (Some(media), Some(duration)) if !duration.is_zero() => {
                 (media.as_secs_f64() % duration.as_secs_f64() / duration.as_secs_f64()) as f32
             }
@@ -237,6 +278,7 @@ impl Render for Player {
             self.handle_events();
             let pull = Self::pull(&self.decoder, self.generation);
             if let Some(image) = self.pacing.advance(now, pull).and_then(image) {
+                self.seeking = None;
                 self.retired.extend(self.shown.replace(image));
                 if let (Some(opened), Some(clip)) = (self.opened.take(), self.clip) {
                     crate::trace::task(|| format!("clip {clip}"), opened);
@@ -321,18 +363,44 @@ impl Render for Player {
                     ),
             )
             .child(
+                // Taller than the bar, so it is easy to hit; the bar thickens under the pointer.
                 div()
+                    .id("progress")
                     .absolute()
                     .left_0()
                     .right_0()
                     .bottom_0()
-                    .h(px(3.))
-                    .bg(theme::alpha(gpui::white(), 0.12))
+                    .h(px(14.))
+                    .flex()
+                    .items_end()
+                    .child(ui::measure(self.bar.clone()))
                     .child(
                         div()
-                            .h_full()
-                            .w(gpui::relative(self.progress(now)))
-                            .bg(on_clip),
+                            .w_full()
+                            .h(px(if self.over_bar { 6. } else { 3. }))
+                            .bg(theme::alpha(gpui::white(), 0.12))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(gpui::relative(self.progress(now)))
+                                    .bg(on_clip),
+                            ),
+                    )
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        this.over_bar = *hovered;
+                        cx.notify();
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            // The clip around it pauses when clicked.
+                            cx.stop_propagation();
+                            let bar = this.bar.get();
+                            if bar.size.width > px(0.) {
+                                let along = (event.position.x - bar.left()) / bar.size.width;
+                                this.seek(along, cx);
+                            }
+                        }),
                     ),
             )
     }
