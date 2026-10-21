@@ -66,6 +66,7 @@ file's line. The hash in `SHA256SUMS.txt` is lowercase.
 | <kbd>1</kbd> to <kbd>9</kbd> | All abilities, then one ability at a time |
 | <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd> | Clip, stand spot, aim, landing |
 | <kbd>Space</kbd> | Pause or play the clip |
+| <kbd>Backspace</kbd> | Play the clip again from the start |
 | <kbd>S</kbd> | Slow motion: ½×, then ¼×, then back to full speed |
 | <kbd>Tab</kbd> | Attack or defense |
 | <kbd>Esc</kbd> | Close the picture, menu, chooser or lineup |

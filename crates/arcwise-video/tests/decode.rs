@@ -120,6 +120,65 @@ fn reports_a_missing_file() {
 }
 
 #[test]
+fn a_seek_starts_at_the_frame_showing_then_and_plays_on() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.open(1, fixture(), None);
+    next_frame(&decoder, 1);
+    let position = Duration::from_millis(500);
+    decoder.seek(2, position);
+    let frame = next_frame(&decoder, 2);
+    // The fixture is 30 frames a second, so the frame showing at 500 ms started within one
+    // frame's time before it.
+    assert!(
+        frame.pts <= position && position - frame.pts < Duration::from_millis(34),
+        "{:?}",
+        frame.pts
+    );
+    let mut last = frame.pts;
+    for _ in 0..30 {
+        let frame = next_frame(&decoder, 2);
+        assert!(frame.pts > last, "{:?} after {last:?}", frame.pts);
+        last = frame.pts;
+    }
+    assert!(last > Duration::from_secs(1), "loops on past the end");
+}
+
+#[test]
+fn a_seek_to_the_start_plays_the_clip_again() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.open(1, fixture(), None);
+    for _ in 0..10 {
+        next_frame(&decoder, 1);
+    }
+    decoder.seek(2, Duration::ZERO);
+    assert_eq!(next_frame(&decoder, 2).pts, Duration::ZERO);
+}
+
+#[test]
+fn a_second_seek_goes_where_it_asks() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.open(1, fixture(), None);
+    next_frame(&decoder, 1);
+    decoder.seek(2, Duration::from_millis(900));
+    let position = Duration::from_millis(200);
+    decoder.seek(3, position);
+    let frame = next_frame(&decoder, 3);
+    assert!(
+        frame.pts <= position && position - frame.pts < Duration::from_millis(34),
+        "{:?}",
+        frame.pts
+    );
+}
+
+#[test]
+fn a_seek_with_no_clip_playing_does_nothing() {
+    let decoder = Decoder::spawn().unwrap();
+    decoder.seek(1, Duration::from_millis(300));
+    decoder.open(2, fixture(), None);
+    assert_eq!(next_frame(&decoder, 2).pts, Duration::ZERO);
+}
+
+#[test]
 fn stop_pauses_until_the_next_open() {
     let decoder = Decoder::spawn().unwrap();
     decoder.open(1, fixture(), None);

@@ -55,6 +55,10 @@ enum Command {
         max_height: Option<u32>,
     },
     Stop,
+    Seek {
+        generation: u64,
+        position: Duration,
+    },
     Prepare {
         path: PathBuf,
         max_height: Option<u32>,
@@ -104,6 +108,15 @@ impl Decoder {
         let _ = self.commands.send(Command::Prepare {
             path: path.into(),
             max_height,
+        });
+    }
+
+    /// Carries on playing the open clip from `position`, starting with the frame showing then.
+    /// Its frames carry `generation`, as after an open; without a clip playing, nothing happens.
+    pub fn seek(&self, generation: u64, position: Duration) {
+        let _ = self.commands.send(Command::Seek {
+            generation,
+            position,
         });
     }
 
