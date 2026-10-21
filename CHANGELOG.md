@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/265866/arcwise/compare/v0.6.0...v0.7.0) - 2026-10-21
+
+### Added
+
+- *(app)* say when an update is ready or installed, and look for one hourly ([#17](https://github.com/265866/arcwise/pull/17))
+
 ## [0.6.0](https://github.com/265866/arcwise/compare/v0.5.0...v0.6.0) - 2026-10-21
 
 ### Added
