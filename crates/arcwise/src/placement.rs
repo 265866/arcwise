@@ -33,8 +33,8 @@ impl Placement {
             width: bounds.size.width.as_f32(),
             height: bounds.size.height.as_f32(),
             maximized,
-            monitor: monitor
-                .and_then(|id| cx.find_display(id))
+            monitor: cx
+                .find_display(monitor)
                 .and_then(|display| display.uuid().ok())
                 .map(|uuid| uuid.to_string()),
         })
@@ -45,13 +45,11 @@ impl Placement {
 /// bounds, comes from. GPUI's own idea of the window's monitor can lag behind as it is dragged
 /// between monitors at different scales. Nothing while the window is minimized.
 #[cfg(windows)]
-fn monitor(window: &Window) -> Option<Option<DisplayId>> {
+fn monitor(window: &Window) -> Option<DisplayId> {
     use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
     use windows::Win32::UI::WindowsAndMessaging::IsIconic;
 
-    let Some(hwnd) = crate::win::hwnd(window) else {
-        return Some(None);
-    };
+    let hwnd = crate::win::hwnd(window)?;
     // SAFETY: the handle is this live window's.
     if unsafe { IsIconic(hwnd) }.as_bool() {
         return None;
@@ -59,12 +57,12 @@ fn monitor(window: &Window) -> Option<Option<DisplayId>> {
     // SAFETY: as above; the nearest monitor is always returned.
     let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
     // GPUI's display ids are the monitors' handles.
-    Some(Some(DisplayId::new(monitor.0 as u64)))
+    Some(DisplayId::new(monitor.0 as u64))
 }
 
 #[cfg(not(windows))]
-fn monitor(_: &Window) -> Option<Option<DisplayId>> {
-    Some(None)
+fn monitor(_: &Window) -> Option<DisplayId> {
+    None
 }
 
 /// Where to open the window: where `saved` says when its monitor is still connected, kept within

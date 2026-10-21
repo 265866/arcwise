@@ -16,10 +16,9 @@ static LIGHT: AtomicBool = AtomicBool::new(false);
 /// The strength that gives the window's look before strength could be chosen.
 pub const DEFAULT_STRENGTH: u8 = 55;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    #[default]
     Dark,
     Light,
 }
@@ -233,14 +232,14 @@ pub fn agent(color: Rgb) -> Rgba {
 pub fn readable(color: impl Into<Rgba>) -> Rgba {
     match mode() {
         Mode::Dark => color.into(),
-        Mode::Light => darkened(color.into(), &LIGHT_PALETTE),
+        Mode::Light => darkened(color.into()),
     }
 }
 
-/// `color` mixed with `palette`'s text until it reads on `palette`'s raised background, the
+/// `color` mixed with the light theme's text until it reads on its raised background, the
 /// darkest one text sits on there.
-fn darkened(color: Rgba, palette: &Palette) -> Rgba {
-    let (text, behind) = (rgb(palette.text), rgb(palette.raised));
+fn darkened(color: Rgba) -> Rgba {
+    let (text, behind) = (rgb(LIGHT_PALETTE.text), rgb(LIGHT_PALETTE.raised));
     (0..=20)
         .map(|step| mix(color, text, 1. - step as f32 * 0.05))
         .find(|c| contrast(*c, behind) >= 4.5)
@@ -315,7 +314,7 @@ mod tests {
         let p = &LIGHT_PALETTE;
         // Bright yellow, lime and cyan, the hardest on white, and a blue that already reads.
         for color in [0xffe066, 0xb6ff59, 0x5fe3ff, 0x3d8bff, 0xffffff] {
-            let text = darkened(rgb(color), p);
+            let text = darkened(rgb(color));
             for background in [p.bg, p.panel, p.raised] {
                 assert!(
                     contrast(text, rgb(background)) >= 4.5,
@@ -324,7 +323,7 @@ mod tests {
             }
         }
         // A color that already reads stays as it is.
-        assert_eq!(darkened(rgb(0x14171c), p), rgb(0x14171c));
+        assert_eq!(darkened(rgb(0x14171c)), rgb(0x14171c));
     }
 
     #[test]

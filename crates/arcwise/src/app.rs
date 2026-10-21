@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use arcwise_core::{Library, LoadError, Start};
 use gpui::{
     Animation, AnimationExt, AsyncApp, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable,
-    FontWeight, IntoElement, MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString,
+    FontWeight, IntoElement, MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString, Task,
     WeakEntity, Window, canvas, div, prelude::*, px,
 };
 
@@ -42,8 +42,8 @@ pub struct Arcwise {
     /// Library loads started, to tell the latest from older ones still running.
     loads: u64,
     updater: Entity<Updater>,
-    /// Times the window has moved or resized, so only the last move's timer saves.
-    moves: u64,
+    /// Saves where the window is once it has stayed still for [`SAVE_AFTER_MOVE`].
+    save_window: Option<Task<()>>,
 }
 
 impl Arcwise {
@@ -62,7 +62,7 @@ impl Arcwise {
             notice: None,
             loads: 0,
             updater,
-            moves: 0,
+            save_window: None,
         };
         match args {
             Err(problem) => {
@@ -392,20 +392,18 @@ impl Arcwise {
             return;
         };
         self.settings.window = Some(placement);
-        self.moves += 1;
-        let moves = self.moves;
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            cx.background_executor().timer(SAVE_AFTER_MOVE).await;
-            this.update(cx, |this, _| {
-                if this.moves == moves
-                    && let Err(e) = this.settings.save_window()
-                {
-                    eprintln!("arcwise: could not save where the window is: {e:#}");
-                }
-            })
-            .ok();
-        })
-        .detach();
+        // Replacing the last move's save drops it, which cancels it.
+        self.save_window = Some(cx.spawn(
+            async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                cx.background_executor().timer(SAVE_AFTER_MOVE).await;
+                this.update(cx, |this, _| {
+                    if let Err(e) = this.settings.save_window() {
+                        eprintln!("arcwise: could not save where the window is: {e:#}");
+                    }
+                })
+                .ok();
+            },
+        ));
     }
 
     /// Opens a new Arcwise and closes this one, which reopens where it was from the settings. A

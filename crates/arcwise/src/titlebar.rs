@@ -74,24 +74,24 @@ pub fn frame(bar: impl IntoElement, window: &Window) -> Div {
             .bg(theme::surface())
             .border_b_1()
             .border_color(theme::line())
-            .child(button(WindowControlArea::Min, MINIMIZE, active))
+            .child(button("minimize", WindowControlArea::Min, MINIMIZE, active))
             .child(button(
+                "maximize",
                 WindowControlArea::Max,
                 if maximized { RESTORE } else { MAXIMIZE },
                 active,
             ))
-            .child(button(WindowControlArea::Close, CLOSE, active)),
+            .child(button("close", WindowControlArea::Close, CLOSE, active)),
     )
 }
 
 /// One of the window's buttons. Windows itself handles the press, as with its own title bar.
-fn button(area: WindowControlArea, icon: &'static [u8], active: bool) -> Stateful<Div> {
-    let id = match area {
-        WindowControlArea::Min => "minimize",
-        WindowControlArea::Max => "maximize",
-        WindowControlArea::Close => "close",
-        WindowControlArea::Drag => "drag",
-    };
+fn button(
+    id: &'static str,
+    area: WindowControlArea,
+    icon: &'static [u8],
+    active: bool,
+) -> Stateful<Div> {
     let close = area == WindowControlArea::Close;
     div()
         .id(id)
