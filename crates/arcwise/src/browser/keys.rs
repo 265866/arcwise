@@ -1,52 +1,13 @@
-//! Keyboard shortcuts.
+//! What the keyboard shortcuts do; [`crate::shortcuts`] says which keys do it.
 
 use arcwise_core::{Direction, View};
-use gpui::{App, Context, KeyBinding, KeyDownEvent, Window, actions};
+use gpui::{Context, KeyDownEvent, Window};
 
 use super::Browser;
-
-actions!(
-    arcwise,
-    [
-        NextLanding,
-        PreviousLanding,
-        NextStand,
-        PreviousStand,
-        WatchClip,
-        ShowStand,
-        ShowAim,
-        ShowLanding,
-        TogglePause,
-        RestartClip,
-        SlowMotion,
-        SwitchSide,
-        Close,
-        ToggleSettings,
-    ]
-);
-
-/// The key context the browser's bindings apply in.
-pub(super) const CONTEXT: &str = "Browser";
-
-pub fn bind(cx: &mut App) {
-    let context = Some(CONTEXT);
-    cx.bind_keys([
-        KeyBinding::new("down", NextLanding, context),
-        KeyBinding::new("up", PreviousLanding, context),
-        KeyBinding::new("right", NextStand, context),
-        KeyBinding::new("left", PreviousStand, context),
-        KeyBinding::new("q", WatchClip, context),
-        KeyBinding::new("w", ShowStand, context),
-        KeyBinding::new("e", ShowAim, context),
-        KeyBinding::new("r", ShowLanding, context),
-        KeyBinding::new("space", TogglePause, context),
-        KeyBinding::new("backspace", RestartClip, context),
-        KeyBinding::new("s", SlowMotion, context),
-        KeyBinding::new("tab", SwitchSide, context),
-        KeyBinding::new("escape", Close, context),
-        KeyBinding::new("ctrl-,", ToggleSettings, context),
-    ]);
-}
+use crate::shortcuts::{
+    NextLanding, NextStand, PreviousLanding, PreviousStand, RestartClip, ShowAim, ShowLanding,
+    ShowStand, SlowMotion, SwitchSide, TogglePause, ToggleSettings, WatchClip,
+};
 
 impl Browser {
     /// A keyboard choice wins over whatever the pointer happens to rest on.
@@ -154,9 +115,11 @@ impl Browser {
 
     /// Closes the topmost thing: the lightbox, the settings window, the chooser if it can close,
     /// or the lineup.
-    pub(super) fn close(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
+    fn close(&mut self, cx: &mut Context<Self>) {
         if self.lightbox.take().is_none() {
-            if self.settings_open {
+            if self.conflict.take().is_some() {
+                // Esc answers a shortcut's question with no, and leaves the settings open.
+            } else if self.settings_open {
                 self.close_settings(cx);
             } else if self.browse.chooser().is_some() {
                 self.browse.dismiss_chooser(&self.library);
@@ -180,15 +143,26 @@ impl Browser {
         }
     }
 
-    /// The number keys pick an ability: 1 for all of them, 2 and up in slot order.
-    pub(super) fn number_key(
+    /// The keys that stay as they are. Esc closes the topmost thing, once per press: Windows'
+    /// repeats of a held Esc do not go on to close what is under it. The number keys pick an
+    /// ability: 1 for all of them, 2 and up in slot order.
+    pub(super) fn fixed_key(
         &mut self,
         event: &KeyDownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let keystroke = &event.keystroke;
-        if keystroke.modifiers.modified() || !self.keys_reach_map() {
+        if keystroke.modifiers.modified() {
+            return;
+        }
+        if keystroke.key == "escape" {
+            if !event.is_held {
+                self.close(cx);
+            }
+            return;
+        }
+        if !self.keys_reach_map() {
             return;
         }
         if let Ok(n @ 1..=9) = keystroke.key.parse::<usize>() {

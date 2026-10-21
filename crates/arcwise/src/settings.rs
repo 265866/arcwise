@@ -1,5 +1,6 @@
 //! What Arcwise remembers between runs, in `%APPDATA%\Arcwise\settings.json`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
@@ -32,6 +33,9 @@ pub struct Settings {
     pub window: Option<Placement>,
     /// The version that ran last, to say so when an update has replaced it.
     pub version: Option<String>,
+    /// Keyboard shortcuts changed from the defaults; see [`crate::shortcuts::Shortcuts::changes`].
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub shortcuts: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Settings {
@@ -46,6 +50,7 @@ impl Default for Settings {
             custom_title_bar: true,
             window: None,
             version: None,
+            shortcuts: BTreeMap::new(),
         }
     }
 }
@@ -181,6 +186,7 @@ mod tests {
                 monitor: Some("a1b2c3d4-0000-0000-0000-000000000002".into()),
             }),
             version: Some("0.6.0".into()),
+            shortcuts: BTreeMap::from([("restart_clip".into(), vec!["ctrl-r".into()])]),
         };
         settings.write(&path).unwrap();
         assert_eq!(Settings::read(&path).unwrap(), settings);
