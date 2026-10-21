@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arcwise_core::{
-    AgentId, Browse, LandingKey, Library, Lineup, LineupId, MapId, Side, Start, View,
+    AbilityId, AgentId, Browse, LandingKey, Library, Lineup, LineupId, MapId, Side, Start, View,
 };
 use gpui::{
     Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Pixels,
@@ -29,8 +29,8 @@ use gpui::{
 use crate::drawn::Drawn;
 use crate::images::{Image, Images, Look, Picture};
 use crate::player::Player;
-use crate::ui;
 use crate::updater::Updater;
+use crate::{theme, titlebar, ui};
 use follow::Follow;
 use part::Part;
 use slide::Slide;
@@ -124,6 +124,26 @@ pub struct SetAutoUpdate(pub bool);
 
 impl EventEmitter<SetAutoUpdate> for Browser {}
 
+/// Emitted when the user picks the dark or light theme, which [`crate::theme::mode`] already
+/// shows.
+#[derive(Clone, Copy, Debug)]
+pub struct SetTheme(pub theme::Mode);
+
+impl EventEmitter<SetTheme> for Browser {}
+
+/// Emitted when the user turns the custom title bar on or off, which
+/// [`crate::titlebar::chosen`] already shows. It takes effect when Arcwise relaunches.
+#[derive(Clone, Copy, Debug)]
+pub struct SetCustomTitleBar(pub bool);
+
+impl EventEmitter<SetCustomTitleBar> for Browser {}
+
+/// Emitted when the user asks Arcwise to relaunch, to apply a setting that needs a new window.
+#[derive(Clone, Copy, Debug)]
+pub struct Relaunch;
+
+impl EventEmitter<Relaunch> for Browser {}
+
 impl Browser {
     /// A browser over `library`, opening at `start`, with `pictures` already decoded for it.
     pub fn new(
@@ -182,6 +202,18 @@ impl Browser {
 
     fn image(&self, path: &Path, cx: &mut Context<Self>) -> Image {
         self.images.update(cx, |images, cx| images.get(path, cx))
+    }
+
+    /// An ability's icon for a chip in the theme's colors. The icons are white, which does not
+    /// show on the light theme, so there they are black.
+    fn chip_icon(&self, ability: AbilityId, cx: &mut Context<Self>) -> Image {
+        let look = match theme::mode() {
+            theme::Mode::Dark => Look::Plain,
+            theme::Mode::Light => Look::Silhouette,
+        };
+        let path = self.library.ability_icon(ability);
+        self.images
+            .update(cx, |images, cx| images.get_as(&path, look, cx))
     }
 
     /// A lineup's aim picture, shrunk to the viewer's size.
@@ -431,14 +463,10 @@ impl Render for Browser {
             .relative()
             .flex()
             .flex_col()
-            .child(
-                parts.header.cached(
-                    StyleRefinement::default()
-                        .w_full()
-                        .h(ui::BAR_HEIGHT)
-                        .flex_none(),
-                ),
-            )
+            .child(titlebar::frame(
+                parts.header.cached(StyleRefinement::default().size_full()),
+                window,
+            ))
             .child(
                 div()
                     .flex_1()
@@ -526,16 +554,18 @@ impl Browser {
             self.images.update(cx, |images, _| images.peek(path, look))
         });
         Some(
+            // Below the header, which stays usable as the window's title bar.
             div()
                 .id("lightbox")
                 .absolute()
                 .inset_0()
+                .top(ui::BAR_HEIGHT)
                 .flex()
                 .items_center()
                 .justify_center()
                 .px(gpui::relative(0.05))
                 .py(gpui::relative(0.05))
-                .bg(crate::theme::alpha(gpui::black(), 0.87))
+                .bg(theme::alpha(gpui::black(), 0.87))
                 .occlude()
                 .cursor_pointer()
                 .on_mouse_down(
@@ -590,6 +620,7 @@ fn ahead(browse: &Browse) -> Vec<LineupId> {
 pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
     let browse = Browse::new(library, start);
     let mut maps = Vec::new();
+    let mut icons = Vec::new();
     let mut paths: Vec<PathBuf> = library
         .agents()
         .iter()
@@ -606,13 +637,23 @@ pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
             maps.push(library.map_image(map, side.other()));
         }
         if let Some(agent) = library.agent(agent) {
-            paths.extend(agent.abilities.iter().map(|ab| library.ability_icon(ab.id)));
+            icons.extend(agent.abilities.iter().map(|ab| library.ability_icon(ab.id)));
         }
         for id in ahead(&browse) {
             paths.extend([library.start_still(id), library.end_still(id)]);
         }
     }
+    // The light theme's chips draw ability icons black, beside the markers' own.
+    let silhouettes: Vec<_> = match theme::mode() {
+        theme::Mode::Light => icons
+            .iter()
+            .map(|icon| (icon.clone(), Look::Silhouette))
+            .collect(),
+        theme::Mode::Dark => Vec::new(),
+    };
+    paths.extend(icons);
     let mut pictures: Vec<_> = paths.into_iter().map(|path| (path, Look::Plain)).collect();
+    pictures.extend(silhouettes);
     // At the window's first size; a display that scales it decodes them again at its own.
     let across = map_across_for(crate::WINDOW_WIDTH, crate::WINDOW_HEIGHT, 1.);
     pictures.extend(maps.into_iter().map(|path| (path, Look::Across(across))));

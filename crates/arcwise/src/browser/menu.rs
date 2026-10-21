@@ -6,10 +6,13 @@ use gpui::{
     canvas, deferred, div, point, prelude::*, px, svg,
 };
 
-use super::{Browser, ChangeLibrary, SetAutoUpdate, SetBlur, SetBlurStrength};
+use super::{
+    Browser, ChangeLibrary, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength, SetCustomTitleBar,
+    SetTheme,
+};
 use crate::settings::Settings;
 use crate::updater::State;
-use crate::{theme, ui};
+use crate::{theme, titlebar, ui};
 
 /// A ring around an arrow pointing up, on the gear while an update waits to be installed.
 const UPDATE_BADGE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5" fill="none" stroke="#000" stroke-width="2.5"/><path d="M12 17V7.5M8 11.5l4-4 4 4" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
@@ -37,6 +40,8 @@ impl Browser {
         let waiting = self.updater.read(cx).waiting();
         div()
             .id("settings")
+            // Over the header, which moves the window where nothing else is.
+            .occlude()
             .group("settings")
             .relative()
             .flex()
@@ -85,7 +90,7 @@ impl Browser {
                         .top(px(-4.))
                         .right(px(-4.))
                         .size(px(14.))
-                        .text_color(gpui::white()),
+                        .text_color(theme::bright()),
                 )
             })
             .children(open.then(|| {
@@ -104,6 +109,7 @@ impl Browser {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
+                    this.lightbox = None;
                     if this.menu_open {
                         this.menu_open = false;
                         cx.notify();
@@ -177,6 +183,53 @@ impl Browser {
             .child(divider())
             .child(
                 row()
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Theme"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(2.))
+                            .p(px(3.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(theme::line())
+                            .child(mode_button(theme::Mode::Dark, "Dark", cx))
+                            .child(mode_button(theme::Mode::Light, "Light", cx)),
+                    ),
+            )
+            .child(
+                row()
+                    .id("title-bar")
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::raised()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Custom title bar"),
+                    )
+                    .children((titlebar::chosen() != titlebar::custom()).then(|| {
+                        text_button("relaunch", "Relaunch").on_click(cx.listener(|_, _, _, cx| {
+                            // The row around it switches the title bar when clicked.
+                            cx.stop_propagation();
+                            cx.emit(Relaunch);
+                        }))
+                    }))
+                    .child(switch(titlebar::chosen()))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        let on = !titlebar::chosen();
+                        titlebar::choose(on);
+                        cx.emit(SetCustomTitleBar(on));
+                        cx.notify();
+                    })),
+            )
+            .child(divider())
+            .child(
+                row()
                     .id("blur")
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::raised()))
@@ -229,20 +282,8 @@ impl Browser {
         if theme::blur() == defaults.blur && theme::strength() == defaults.blur_strength {
             return None;
         }
-        let reset = div()
-            .id("reset-blur")
-            // As tall as the switch beside it, so the row keeps its height when this shows.
-            .h(px(22.))
-            .flex()
-            .items_center()
-            .px(px(8.))
-            .rounded(px(6.))
-            .text_size(px(12.))
-            .text_color(theme::muted())
-            .cursor_pointer()
-            .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-            .child("Reset")
-            .on_click(cx.listener(move |_, _, window, cx| {
+        let reset =
+            text_button("reset-blur", "Reset").on_click(cx.listener(move |_, _, window, cx| {
                 // The row around it turns blur on or off when clicked.
                 cx.stop_propagation();
                 theme::set_blur(defaults.blur);
@@ -298,7 +339,7 @@ impl Browser {
                             // Clicked mid-download, it installs once the download is verified.
                             ui::icon_frame("update-now", px(30.))
                                 .cursor_pointer()
-                                .child(ui::spinner(px(14.)))
+                                .child(ui::spinner(px(14.), theme::text()))
                         } else {
                             ui::icon_button("update-now", DOWNLOAD, px(30.), theme::text())
                         }
@@ -460,6 +501,53 @@ fn layer(data: &'static [u8]) -> gpui::Svg {
     svg().data(data).absolute().inset_0().size_full()
 }
 
+/// A small text button at the end of a row, beside its switch.
+fn text_button(id: &'static str, label: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        // As tall as the switch beside it, so the row keeps its height when this shows.
+        .h(px(22.))
+        .flex()
+        .items_center()
+        .px(px(8.))
+        .rounded(px(6.))
+        .text_size(px(12.))
+        .text_color(theme::muted())
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+        .child(label)
+}
+
+/// One side of the theme picker, which switches every color at once.
+fn mode_button(mode: theme::Mode, label: &'static str, cx: &mut Context<Browser>) -> Stateful<Div> {
+    let on = theme::mode() == mode;
+    div()
+        .id(label)
+        .h(px(26.))
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .rounded(px(6.))
+        .text_size(px(13.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(if on { theme::text() } else { theme::muted() })
+        .when(on, |d| d.bg(theme::raised()))
+        .when(!on, |d| {
+            d.cursor_pointer().hover(|s| s.text_color(theme::text()))
+        })
+        .child(label)
+        .on_click(cx.listener(move |_, _, window, cx| {
+            if theme::mode() == mode {
+                return;
+            }
+            theme::set_mode(mode);
+            titlebar::sync_native(window);
+            // Every view draws again, cached ones too, in the new colors.
+            window.refresh();
+            cx.emit(SetTheme(mode));
+        }))
+}
+
 /// A line between the menu's sections.
 fn divider() -> Div {
     div().h(px(1.)).mx(px(10.)).bg(theme::line())
@@ -495,8 +583,9 @@ fn switch(on: bool) -> Div {
         .when(!on, |d| {
             d.bg(theme::raised()).border_color(theme::line_hover())
         })
+        // Light on the accent in either theme.
         .child(div().size(px(14.)).rounded_full().bg(if on {
-            theme::text()
+            gpui::rgb(theme::DARK.text)
         } else {
             theme::muted()
         }))

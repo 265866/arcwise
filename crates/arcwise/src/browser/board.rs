@@ -84,7 +84,7 @@ impl Browser {
                 .library
                 .ability(id)
                 .map_or_else(String::new, |a| a.name.clone());
-            let icon = self.image(&self.library.ability_icon(id), cx).ready();
+            let icon = self.chip_icon(id, cx).ready();
             filter_button(
                 gpui::ElementId::Integer(u64::from(id.0)),
                 i + 2,
@@ -258,8 +258,9 @@ impl Browser {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(theme::text())
-                        .text_color(theme::bg())
+                        // Over the map picture, which is dark in either theme.
+                        .bg(gpui::rgb(theme::DARK.text))
+                        .text_color(gpui::rgb(theme::DARK.bg))
                         .font_weight(FontWeight::EXTRA_BOLD)
                         .text_size(px(10.))
                         .child(count.to_string()),
@@ -330,7 +331,7 @@ impl Browser {
                     .bg(if on {
                         color
                     } else {
-                        theme::alpha(theme::bg(), 0.91)
+                        theme::alpha(gpui::rgb(theme::DARK.bg), 0.91)
                     })
                     .when(dimmed, |d| d.opacity(0.35))
                     .group_hover(group, |s| s.size(px(MARKER * 1.2)).opacity(1.))
@@ -419,11 +420,15 @@ impl Browser {
             .flex()
             .items_center()
             .justify_center()
-            .bg(if on { color } else { theme::text().into() })
+            .bg(if on {
+                color
+            } else {
+                gpui::rgb(theme::DARK.text).into()
+            })
             .text_color(if on {
                 gpui::black()
             } else {
-                theme::bg().into()
+                gpui::rgb(theme::DARK.bg).into()
             })
             .font_weight(FontWeight::EXTRA_BOLD)
             .text_size(px(12.))
@@ -486,7 +491,7 @@ impl Browser {
                     div()
                         .text_size(px(11.))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(color)
+                        .text_color(theme::readable(color))
                         .child(format!("{ability} lands at")),
                 )
                 .child(
@@ -533,7 +538,7 @@ fn filter_button(
         .rounded(px(8.))
         .border_1()
         .border_color(if on {
-            gpui::rgb(0x3a4556)
+            theme::line_strong()
         } else {
             theme::line()
         })

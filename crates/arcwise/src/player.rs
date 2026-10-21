@@ -249,17 +249,20 @@ impl Render for Player {
         }
         let waiting = self.clip.is_some() && self.shown.is_none() && self.failed.is_none();
         let speed = self.pacing.speed();
+        // Over the clip, which is dark in either theme.
+        let on_clip = gpui::rgb(theme::DARK.text);
         div()
             .id("player")
             .relative()
             .size_full()
+            .text_color(on_clip)
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.toggle_pause(cx)),
             )
             .children(self.shown.clone().map(ui::cover))
-            .when(waiting, |d| d.child(ui::spinner(px(34.))))
+            .when(waiting, |d| d.child(ui::spinner(px(34.), on_clip)))
             .when(self.paused, |d| {
                 d.child(
                     div()
@@ -284,7 +287,7 @@ impl Render for Player {
                             .py(px(8.))
                             .rounded(px(8.))
                             .bg(theme::alpha(gpui::black(), 0.8))
-                            .text_color(theme::muted())
+                            .text_color(gpui::rgb(theme::DARK.muted))
                             .text_size(px(13.))
                             .child(failed),
                     )
@@ -329,7 +332,7 @@ impl Render for Player {
                         div()
                             .h_full()
                             .w(gpui::relative(self.progress(now)))
-                            .bg(theme::text()),
+                            .bg(on_clip),
                     ),
             )
     }

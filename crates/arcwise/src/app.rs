@@ -8,18 +8,20 @@ use std::time::{Duration, Instant};
 use arcwise_core::{Library, LoadError, Start};
 use gpui::{
     Animation, AnimationExt, AsyncApp, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable,
-    FontWeight, IntoElement, MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString,
+    FontWeight, IntoElement, MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString, Task,
     WeakEntity, Window, canvas, div, prelude::*, px,
 };
 
 use crate::args::Args;
 use crate::browser::{
-    self, Browser, ChangeLibrary, Chosen, SetAutoUpdate, SetBlur, SetBlurStrength,
+    self, Browser, ChangeLibrary, Chosen, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength,
+    SetCustomTitleBar, SetTheme,
 };
 use crate::images::{self, Picture};
+use crate::placement::Placement;
 use crate::settings::{Last, Settings};
-use crate::updater::{TOAST_LIFETIME, Toast, Updater};
-use crate::{theme, trace, ui, update};
+use crate::updater::{State, TOAST_LIFETIME, Toast, Updater};
+use crate::{theme, titlebar, trace, ui, update};
 
 enum Screen {
     /// No library yet, or the last one failed to load.
@@ -40,6 +42,8 @@ pub struct Arcwise {
     /// Library loads started, to tell the latest from older ones still running.
     loads: u64,
     updater: Entity<Updater>,
+    /// Saves where the window is once it has stayed still for [`SAVE_AFTER_MOVE`].
+    save_window: Option<Task<()>>,
 }
 
 impl Arcwise {
@@ -58,6 +62,7 @@ impl Arcwise {
             notice: None,
             loads: 0,
             updater,
+            save_window: None,
         };
         match args {
             Err(problem) => {
@@ -179,6 +184,21 @@ impl Arcwise {
                     },
                 )
                 .detach();
+                cx.subscribe(&browser, |this, _, &SetTheme(mode): &SetTheme, _| {
+                    this.settings.theme = mode;
+                    this.save_settings();
+                })
+                .detach();
+                cx.subscribe(
+                    &browser,
+                    |this, _, &SetCustomTitleBar(on): &SetCustomTitleBar, _| {
+                        this.settings.custom_title_bar = on;
+                        this.save_settings();
+                    },
+                )
+                .detach();
+                cx.subscribe(&browser, |this, _, _: &Relaunch, cx| this.relaunch(cx))
+                    .detach();
                 if let Screen::Browsing(old) = &self.screen {
                     old.update(cx, |old, cx| old.release_all(cx));
                 }
@@ -365,6 +385,47 @@ impl Arcwise {
         }
     }
 
+    /// Remembers where the window is, and saves it once the window has stayed still for a moment
+    /// rather than at every step of a drag.
+    pub fn window_moved(&mut self, window: &Window, cx: &mut Context<Self>) {
+        // GPUI also reports a bounds change when the window gains or loses focus, as when
+        // switching to the game and back, where nothing has moved.
+        let Some(placement) = Placement::of(window, cx)
+            .filter(|placement| self.settings.window.as_ref() != Some(placement))
+        else {
+            return;
+        };
+        self.settings.window = Some(placement);
+        // Replacing the last move's save drops it, which cancels it.
+        self.save_window = Some(cx.spawn(
+            async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                cx.background_executor().timer(SAVE_AFTER_MOVE).await;
+                this.update(cx, |this, _| {
+                    if let Err(e) = this.settings.save_window() {
+                        eprintln!("arcwise: could not save where the window is: {e:#}");
+                    }
+                })
+                .ok();
+            },
+        ));
+    }
+
+    /// Opens a new Arcwise and closes this one, which reopens where it was from the settings. A
+    /// downloaded update installs instead, and the installer opens the new version.
+    fn relaunch(&mut self, cx: &mut Context<Self>) {
+        // The new window opens where this one is.
+        self.save_settings();
+        if matches!(self.updater.read(cx).state(), State::Ready(_)) {
+            self.updater
+                .update(cx, |updater, cx| updater.install_now(cx));
+            return;
+        }
+        match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).spawn()) {
+            Ok(_) => cx.quit(),
+            Err(e) => eprintln!("arcwise: could not relaunch: {e}"),
+        }
+    }
+
     fn choose_folder(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.pick_folder(cx);
     }
@@ -469,7 +530,7 @@ impl Render for Arcwise {
                 Screen::Browsing(_) => unreachable!("rendered above"),
             };
             root.relative()
-                .child(ui::bar())
+                .child(titlebar::frame(ui::bar(), window))
                 .child(div().flex_1().min_h_0().child(body))
         };
         let root = root.children(self.update_toast(cx));
@@ -480,6 +541,10 @@ impl Render for Arcwise {
         }
     }
 }
+
+/// How long the window must stay still before where it is gets saved. A move this soon before
+/// closing is not saved.
+const SAVE_AFTER_MOVE: Duration = Duration::from_millis(500);
 
 /// How long the window waits for the library read since launch before opening without it.
 const PRELOAD_WAIT: Duration = Duration::from_millis(100);
