@@ -19,6 +19,10 @@ use crate::{theme, ui};
 /// How far the stand view zooms into the map.
 pub(super) const STAND_ZOOM: f32 = 3.;
 
+/// The least width of the panel's content, which keeps it from reflowing as the panel grows and
+/// shrinks.
+pub(super) const CONTENT_MIN: f32 = 520.;
+
 impl Browser {
     /// The panel's contents, faded and nudged in as it slides `open`; the browser sets its width.
     pub(super) fn panel(&self, open: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -44,9 +48,7 @@ impl Browser {
                         .flex()
                         .flex_col()
                         .gap(px(12.))
-                        // A fixed minimum width keeps the content from reflowing as the panel
-                        // grows and shrinks.
-                        .min_w(px(520.))
+                        .min_w(px(CONTENT_MIN))
                         .px(px(24.))
                         .py(px(20.))
                         .ml(px(24. * (1. - open)))

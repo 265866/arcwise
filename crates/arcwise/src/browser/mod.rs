@@ -554,6 +554,7 @@ impl Render for Browser {
                                 StyleRefinement::default()
                                     .flex_none()
                                     .w(gpui::relative(open * 0.5))
+                                    .min_w(PANEL_MIN * open)
                                     .h_full(),
                             ),
                         )
@@ -769,9 +770,13 @@ fn plural(n: usize, word: &str) -> String {
     }
 }
 
-/// The most device pixel rows the viewer can show once the panel is open: half the window,
-/// less the panel's padding, at 16:9. Rounded up to a multiple of 90 rows (a 16th of 1440p),
-/// so small changes to the window do not reopen clips at a new size.
+/// The narrowest the open panel gets: its content's own least width and its border. In a narrow
+/// window it takes more than half, so its content is never cut off.
+const PANEL_MIN: Pixels = gpui::px(panel::CONTENT_MIN + 1.);
+
+/// The most device pixel rows the viewer can show once the panel is open: the panel's width, half
+/// the window or [`PANEL_MIN`], less its padding, at 16:9. Rounded up to a multiple of 90 rows (a
+/// 16th of 1440p), so small changes to the window do not reopen clips at a new size.
 fn viewer_rows(window: &Window) -> u32 {
     viewer_rows_for(
         f32::from(window.viewport_size().width),
@@ -781,7 +786,7 @@ fn viewer_rows(window: &Window) -> u32 {
 
 /// [`viewer_rows`] for a window `width` wide at `scale`.
 fn viewer_rows_for(width: f32, scale: f32) -> u32 {
-    let width = width / 2. - 48.;
+    let width = (width / 2.).max(f32::from(PANEL_MIN)) - 48.;
     let rows = (width * 9. / 16. * scale).max(360.);
     (rows / 90.).ceil() as u32 * 90
 }
@@ -793,6 +798,16 @@ mod tests {
         assert_eq!(super::map_across_for(1440., 900., 1.), 1024);
         assert_eq!(super::map_across_for(2560., 1440., 1.), 1536);
         assert_eq!(super::map_across_for(3840., 2160., 1.5), 2048);
+    }
+
+    #[test]
+    fn the_viewer_fits_the_panel_in_a_narrow_window() {
+        // Half of these is wider than the panel's least width.
+        assert_eq!(super::viewer_rows_for(1440., 1.), 450);
+        assert_eq!(super::viewer_rows_for(2560., 1.), 720);
+        // 960 wide, the panel takes 521 rather than 480: 466 device rows at 1.75x rather than 425,
+        // which round up to 540 rather than 450.
+        assert_eq!(super::viewer_rows_for(960., 1.75), 540);
     }
 
     #[test]

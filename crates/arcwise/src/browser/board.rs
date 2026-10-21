@@ -52,12 +52,13 @@ impl Browser {
     }
 
     /// One button per ability with lineups on this side, and one for all of them. Hidden, but
-    /// still taking its space, while there is only one ability.
+    /// still taking its space, while there is only one ability. In a narrow column the buttons
+    /// wrap onto more lines, and the map below takes what is left.
     fn ability_filter(&self, cx: &mut Context<Self>) -> Div {
         let abilities = self.browse.abilities(&self.library);
         let total: usize = abilities.iter().map(|(_, n)| n).sum();
         let row = div()
-            .h(px(34.))
+            .min_h(px(34.))
             .flex()
             .flex_wrap()
             .justify_center()
@@ -468,18 +469,23 @@ impl Browser {
             .join(", ");
         let (x, y) = (side * (landing.at.x / 100.), side * (landing.at.y / 100.));
         let gap = px(22.);
+        // On whichever side of the landing has more of the map, and no wider than that side, so a
+        // small map keeps it clear of the panel beside it.
+        let (left_room, right_room) = (x - gap, side - x - gap);
+        let to_left = left_room > right_room;
+        let room = f32::from(if to_left { left_room } else { right_room });
         Some(
             div()
                 .absolute()
                 .top(y - px(36.))
                 .map(|d| {
-                    if landing.at.x > 60. {
+                    if to_left {
                         d.right(side - x + gap)
                     } else {
                         d.left(x + gap)
                     }
                 })
-                .max_w(px(260.))
+                .max_w(px(room.clamp(140., 260.)))
                 .px(px(12.))
                 .py(px(10.))
                 .rounded(px(10.))
