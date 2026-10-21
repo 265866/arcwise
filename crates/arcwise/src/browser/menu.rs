@@ -24,6 +24,8 @@ const NOTCHED_BORDER: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewB
 
 /// An arrow down onto a line, on the button that installs an update.
 const DOWNLOAD: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+/// A circling arrow, on the button that installs an update already downloaded and relaunches.
+const RESTART: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4v4h-4" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
 
 /// The app icon's arc and diamond without its square, as two masks to tint apart.
 const LOGO_ARC: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="35 53 200 200"><path d="M50 206 Q 104 30 182 146" fill="none" stroke="#000" stroke-width="20" stroke-linecap="round"/></svg>"##;
@@ -298,11 +300,11 @@ impl Browser {
 
     /// The logo and the version running, with a button that updates to a newer one and relaunches.
     fn version(&self, cx: &mut Context<Self>) -> Div {
-        let (newer, downloading) = match self.updater.read(cx).state() {
-            State::UpToDate => (None, false),
-            State::Available(version) => (Some(version.clone()), false),
-            State::Downloading { version, .. } => (Some(version.clone()), true),
-            State::Ready(update) => (Some(update.version.clone()), false),
+        let (newer, downloading, ready) = match self.updater.read(cx).state() {
+            State::UpToDate => (None, false, false),
+            State::Available(version) => (Some(version.clone()), false, false),
+            State::Downloading { version, .. } => (Some(version.clone()), true, false),
+            State::Ready(update) => (Some(update.version.clone()), false, true),
         };
         row()
             .gap(px(10.))
@@ -323,7 +325,11 @@ impl Browser {
                     .child(concat!("Arcwise ", env!("CARGO_PKG_VERSION"))),
             )
             .children(newer.map(|version| {
-                let tip = ui::tip(format!("Update to {version} and relaunch"));
+                let tip = ui::tip(if ready {
+                    format!("{version} installs when Arcwise closes. Update and relaunch now")
+                } else {
+                    format!("Update to {version} and relaunch")
+                });
                 div()
                     .flex()
                     .items_center()
@@ -332,7 +338,11 @@ impl Browser {
                         div()
                             .text_size(px(12.))
                             .text_color(theme::faint())
-                            .child(format!("{version} available")),
+                            .child(if ready {
+                                format!("{version} ready")
+                            } else {
+                                format!("{version} available")
+                            }),
                     )
                     .child(
                         if downloading {
@@ -341,7 +351,8 @@ impl Browser {
                                 .cursor_pointer()
                                 .child(ui::spinner(px(14.), theme::text()))
                         } else {
-                            ui::icon_button("update-now", DOWNLOAD, px(30.), theme::text())
+                            let icon = if ready { RESTART } else { DOWNLOAD };
+                            ui::icon_button("update-now", icon, px(30.), theme::text())
                         }
                         .tooltip(tip)
                         .on_click(cx.listener(|this, _, _, cx| {

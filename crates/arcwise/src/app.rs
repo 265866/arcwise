@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use arcwise_core::{Library, LoadError, Start};
 use gpui::{
     Animation, AnimationExt, AsyncApp, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable,
-    FontWeight, IntoElement, MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString, Task,
-    WeakEntity, Window, canvas, div, prelude::*, px,
+    FontWeight, IntoElement, MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString,
+    Stateful, Task, WeakEntity, Window, canvas, div, prelude::*, px,
 };
 
 use crate::args::Args;
@@ -49,11 +49,12 @@ pub struct Arcwise {
 impl Arcwise {
     pub fn new(
         args: Result<Args, String>,
-        settings: Settings,
+        mut settings: Settings,
         preload: Option<Receiver<Opened>>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let updater = cx.new(|cx| Updater::new(settings.auto_update, cx));
+        let updated = settings.note_version(&update::current_version());
+        let updater = cx.new(|cx| Updater::new(settings.auto_update, updated, cx));
         cx.observe(&updater, |_, _, cx| cx.notify()).detach();
         let mut this = Arcwise {
             screen: Screen::Welcome { problem: None },
@@ -255,8 +256,8 @@ impl Arcwise {
             )
     }
 
-    /// A toast at the bottom right about a newer version. The one saying it is available fades
-    /// away by itself; one saying it did not install stays until dismissed.
+    /// A toast at the bottom right about a version. Ones saying a version is available, ready or
+    /// installed fade away by themselves; one saying it did not install stays until dismissed.
     fn update_toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let toast = div()
             .absolute()
@@ -268,39 +269,69 @@ impl Arcwise {
             .border_color(theme::line())
             .bg(theme::panel())
             .shadow_lg();
+        // Fully shown for most of its life, then fades out over the last second.
+        let fade = 1. / TOAST_LIFETIME.as_secs_f32();
+        let row = |toast: Div, id: &'static str, text: String| {
+            toast
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .py(px(8.))
+                .pl(px(14.))
+                .pr(px(8.))
+                .min_h(px(46.))
+                .text_size(px(13.))
+                .child(text)
+        };
+        let fade_out = move |toast: Stateful<Div>, id: &'static str| {
+            toast
+                .with_animation(id, Animation::new(TOAST_LIFETIME), move |toast, t| {
+                    toast.opacity(((1. - t) / fade).min(1.))
+                })
+                .into_any_element()
+        };
         Some(match self.updater.read(cx).toast()? {
             Toast::Available(version) => {
-                // Fully shown for most of its life, then fades out over the last second.
-                let fade = 1. / TOAST_LIFETIME.as_secs_f32();
                 let browser = match &self.screen {
                     Screen::Browsing(browser) => Some(browser.clone()),
                     Screen::Welcome { .. } | Screen::Loading(_) => None,
                 };
-                toast
-                    .id("update-available")
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .py(px(8.))
-                    .pl(px(14.))
-                    .pr(px(8.))
-                    .text_size(px(13.))
-                    .child(format!("Arcwise {version} is available"))
-                    .children(browser.map(|browser| {
-                        ui::icon_button("update-settings", ui::GEAR, px(30.), theme::muted())
-                            .tooltip(ui::tip("Open settings"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if browser.update(cx, |browser, cx| browser.open_menu(cx)) {
-                                    this.updater.update(cx, |u, cx| u.dismiss_toast(cx));
-                                }
-                            }))
-                    }))
-                    .with_animation(
-                        "update-available-fade",
-                        Animation::new(TOAST_LIFETIME),
-                        move |toast, t| toast.opacity(((1. - t) / fade).min(1.)),
-                    )
-                    .into_any_element()
+                let toast = row(
+                    toast,
+                    "update-available",
+                    format!("Arcwise {version} is available"),
+                )
+                .children(browser.map(|browser| {
+                    ui::icon_button("update-settings", ui::GEAR, px(30.), theme::muted())
+                        .tooltip(ui::tip("Open settings"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if browser.update(cx, |browser, cx| browser.open_menu(cx)) {
+                                this.updater.update(cx, |u, cx| u.dismiss_toast(cx));
+                            }
+                        }))
+                }));
+                fade_out(toast, "update-available-fade")
+            }
+            Toast::Ready(version) => {
+                let toast = row(
+                    toast,
+                    "update-ready",
+                    format!("Arcwise {version} installs when you close it"),
+                )
+                .child(
+                    ui::button("update-restart", "Restart now").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.updater.update(cx, |u, cx| u.install_now(cx));
+                        },
+                    )),
+                );
+                fade_out(toast, "update-ready-fade")
+            }
+            Toast::Updated(version) => {
+                let toast =
+                    row(toast, "updated", format!("Updated to Arcwise {version}")).pr(px(14.));
+                fade_out(toast, "updated-fade")
             }
             Toast::Failed { version, why } => {
                 toast

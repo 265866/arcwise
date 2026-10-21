@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use arcwise_core::{AgentId, MapId, Side};
+use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::placement::Placement;
@@ -29,6 +30,8 @@ pub struct Settings {
     pub custom_title_bar: bool,
     /// Where the window was when it last moved, to open there again.
     pub window: Option<Placement>,
+    /// The version that ran last, to say so when an update has replaced it.
+    pub version: Option<String>,
 }
 
 impl Default for Settings {
@@ -42,8 +45,16 @@ impl Default for Settings {
             theme: theme::Mode::Dark,
             custom_title_bar: true,
             window: None,
+            version: None,
         }
     }
+}
+
+/// Whether `current` is newer than the version that ran `last`. Without one, as on a first run or
+/// after a version that did not note it, nothing says so.
+fn updated(last: Option<&str>, current: &Version) -> bool {
+    last.and_then(|last| Version::parse(last).ok())
+        .is_some_and(|last| last < *current)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -93,12 +104,38 @@ impl Settings {
     /// saved since are kept.
     pub fn save_window(&self) -> anyhow::Result<()> {
         let path = Self::path().context("APPDATA is not set")?;
-        self.write_window(&path)
+        self.write_over(&path, |saved| saved.window = self.window.clone())
     }
 
-    fn write_window(&self, path: &Path) -> anyhow::Result<()> {
-        let mut saved = Self::read(path).unwrap_or_else(|_| self.clone());
-        saved.window = self.window.clone();
+    /// Notes `current` as the version that ran last, and returns it when it replaced an older one
+    /// since Arcwise last ran.
+    pub fn note_version(&mut self, current: &Version) -> Option<Version> {
+        let updated = updated(self.version.as_deref(), current);
+        let running = current.to_string();
+        if self.version.as_ref() != Some(&running) {
+            self.version = Some(running);
+            if let Err(e) = self.save_version() {
+                eprintln!("arcwise: could not save the version: {e:#}");
+            }
+        }
+        updated.then(|| current.clone())
+    }
+
+    /// Saves only the version that ran last, the same way.
+    fn save_version(&self) -> anyhow::Result<()> {
+        let path = Self::path().context("APPDATA is not set")?;
+        self.write_over(&path, |saved| saved.version = self.version.clone())
+    }
+
+    /// Changes the settings in the file with `change`, or these if there is no file yet. A file
+    /// that does not parse, as after a mistaken hand edit, is left for its owner to fix.
+    fn write_over(&self, path: &Path, change: impl FnOnce(&mut Settings)) -> anyhow::Result<()> {
+        let mut saved = if path.exists() {
+            Self::read(path)?
+        } else {
+            self.clone()
+        };
+        change(&mut saved);
         saved.write(path)
     }
 
@@ -143,6 +180,7 @@ mod tests {
                 maximized: true,
                 monitor: Some("a1b2c3d4-0000-0000-0000-000000000002".into()),
             }),
+            version: Some("0.6.0".into()),
         };
         settings.write(&path).unwrap();
         assert_eq!(Settings::read(&path).unwrap(), settings);
@@ -169,11 +207,61 @@ mod tests {
             }),
             ..Settings::default()
         };
-        this.write_window(&path).unwrap();
+        this.write_over(&path, |saved| saved.window = this.window.clone())
+            .unwrap();
         let read = Settings::read(&path).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(read.theme, theme::Mode::Light, "the other's theme is kept");
         assert_eq!(read.window, this.window);
+    }
+
+    #[test]
+    fn saving_one_setting_leaves_a_file_that_does_not_parse() {
+        let dir = std::env::temp_dir().join(format!("arcwise-broken-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "{ \"theme\": \"dark\", oops }").unwrap();
+        let this = Settings {
+            version: Some("0.7.0".into()),
+            ..Settings::default()
+        };
+        let saved = this.write_over(&path, |saved| saved.version = this.version.clone());
+        let left = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(saved.is_err());
+        assert_eq!(left, "{ \"theme\": \"dark\", oops }");
+    }
+
+    #[test]
+    fn saving_one_setting_starts_a_file_that_is_not_there() {
+        let dir = std::env::temp_dir().join(format!("arcwise-fresh-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        let this = Settings {
+            version: Some("0.7.0".into()),
+            ..Settings::default()
+        };
+        this.write_over(&path, |saved| saved.version = this.version.clone())
+            .unwrap();
+        let read = Settings::read(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(read, this);
+    }
+
+    #[test]
+    fn an_update_is_a_newer_version_than_the_last_run() {
+        let current = Version::new(0, 7, 0);
+        assert!(updated(Some("0.6.0"), &current));
+        assert!(!updated(Some("0.7.0"), &current), "the same version again");
+        assert!(
+            !updated(Some("0.8.0"), &current),
+            "an older version installed over it"
+        );
+        assert!(
+            !updated(None, &current),
+            "a first run, or one after 0.6.0 and earlier"
+        );
+        assert!(!updated(Some("not a version"), &current));
     }
 
     #[test]
