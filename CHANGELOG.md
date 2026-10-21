@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/265866/arcwise/compare/v0.4.0...v0.5.0) - 2026-10-21
+
+### Added
+
+- *(app)* Backspace replays the clip and its progress bar seeks ([#13](https://github.com/265866/arcwise/pull/13))
+
 ## [0.4.0](https://github.com/265866/arcwise/compare/v0.3.0...v0.4.0) - 2026-10-21
 
 ### Added
