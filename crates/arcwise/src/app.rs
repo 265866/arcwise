@@ -388,7 +388,11 @@ impl Arcwise {
     /// Remembers where the window is, and saves it once the window has stayed still for a moment
     /// rather than at every step of a drag.
     pub fn window_moved(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(placement) = Placement::of(window, cx) else {
+        // GPUI also reports a bounds change when the window gains or loses focus, as when
+        // switching to the game and back, where nothing has moved.
+        let Some(placement) = Placement::of(window, cx)
+            .filter(|placement| self.settings.window.as_ref() != Some(placement))
+        else {
             return;
         };
         self.settings.window = Some(placement);

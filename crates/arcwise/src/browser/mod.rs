@@ -620,6 +620,7 @@ fn ahead(browse: &Browse) -> Vec<LineupId> {
 pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
     let browse = Browse::new(library, start);
     let mut maps = Vec::new();
+    let mut icons = Vec::new();
     let mut paths: Vec<PathBuf> = library
         .agents()
         .iter()
@@ -636,13 +637,23 @@ pub fn first_pictures(library: &Library, start: Start) -> Vec<(PathBuf, Look)> {
             maps.push(library.map_image(map, side.other()));
         }
         if let Some(agent) = library.agent(agent) {
-            paths.extend(agent.abilities.iter().map(|ab| library.ability_icon(ab.id)));
+            icons.extend(agent.abilities.iter().map(|ab| library.ability_icon(ab.id)));
         }
         for id in ahead(&browse) {
             paths.extend([library.start_still(id), library.end_still(id)]);
         }
     }
+    // The light theme's chips draw ability icons black, beside the markers' own.
+    let silhouettes: Vec<_> = match theme::mode() {
+        theme::Mode::Light => icons
+            .iter()
+            .map(|icon| (icon.clone(), Look::Silhouette))
+            .collect(),
+        theme::Mode::Dark => Vec::new(),
+    };
+    paths.extend(icons);
     let mut pictures: Vec<_> = paths.into_iter().map(|path| (path, Look::Plain)).collect();
+    pictures.extend(silhouettes);
     // At the window's first size; a display that scales it decodes them again at its own.
     let across = map_across_for(crate::WINDOW_WIDTH, crate::WINDOW_HEIGHT, 1.);
     pictures.extend(maps.into_iter().map(|path| (path, Look::Across(across))));

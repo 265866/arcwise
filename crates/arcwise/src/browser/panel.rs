@@ -463,7 +463,8 @@ fn missing(text: &'static str) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .text_color(theme::muted())
+        // In the viewer, which is black in either theme.
+        .text_color(gpui::rgb(theme::DARK.muted))
         .child(text)
         .into_any_element()
 }
