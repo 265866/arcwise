@@ -9,6 +9,7 @@ mod browser;
 mod drawn;
 mod images;
 mod pacing;
+mod placement;
 mod player;
 mod settings;
 mod theme;
@@ -17,14 +18,16 @@ mod trace;
 mod ui;
 mod update;
 mod updater;
+#[cfg(windows)]
+mod win;
 
-use gpui::{App, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
+use gpui::{App, WindowOptions, prelude::*, px, size};
 
 use crate::app::Arcwise;
 use crate::args::Args;
 use crate::settings::Settings;
 
-/// The window's size when it opens.
+/// The window's size when it opens with nowhere saved to open it.
 const WINDOW_WIDTH: f32 = 1440.;
 const WINDOW_HEIGHT: f32 = 900.;
 
@@ -58,10 +61,11 @@ fn main() {
             .detach();
         }
         browser::bind_keys(cx);
-        let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
+        let (window_bounds, display_id) = placement::restore(settings.window.as_ref(), cx);
         cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(window_bounds),
+                display_id,
                 window_background: theme::window_background(),
                 // GPUI slows windows without focus to about 30 frames a second, which made clips
                 // stutter while the game had focus: exactly when they are watched.
@@ -76,6 +80,10 @@ fn main() {
                 cx.new(|cx| {
                     cx.observe_window_appearance(window, |_, window, _| {
                         titlebar::sync_native(window);
+                    })
+                    .detach();
+                    cx.observe_window_bounds(window, |this: &mut Arcwise, window, cx| {
+                        this.window_moved(window, cx);
                     })
                     .detach();
                     Arcwise::new(args, settings, preload, cx)

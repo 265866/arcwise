@@ -18,6 +18,7 @@ use crate::browser::{
     SetCustomTitleBar, SetTheme,
 };
 use crate::images::{self, Picture};
+use crate::placement::Placement;
 use crate::settings::{Last, Settings};
 use crate::updater::{State, TOAST_LIFETIME, Toast, Updater};
 use crate::{theme, titlebar, trace, ui, update};
@@ -41,6 +42,8 @@ pub struct Arcwise {
     /// Library loads started, to tell the latest from older ones still running.
     loads: u64,
     updater: Entity<Updater>,
+    /// Times the window has moved or resized, so only the last move's timer saves.
+    moves: u64,
 }
 
 impl Arcwise {
@@ -59,6 +62,7 @@ impl Arcwise {
             notice: None,
             loads: 0,
             updater,
+            moves: 0,
         };
         match args {
             Err(problem) => {
@@ -381,9 +385,34 @@ impl Arcwise {
         }
     }
 
+    /// Remembers where the window is, and saves it once the window has stayed still for a moment
+    /// rather than at every step of a drag.
+    pub fn window_moved(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(placement) = Placement::of(window, cx) else {
+            return;
+        };
+        self.settings.window = Some(placement);
+        self.moves += 1;
+        let moves = self.moves;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            cx.background_executor().timer(SAVE_AFTER_MOVE).await;
+            this.update(cx, |this, _| {
+                if this.moves == moves
+                    && let Err(e) = this.settings.save_window()
+                {
+                    eprintln!("arcwise: could not save where the window is: {e:#}");
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Opens a new Arcwise and closes this one, which reopens where it was from the settings. A
     /// downloaded update installs instead, and the installer opens the new version.
     fn relaunch(&mut self, cx: &mut Context<Self>) {
+        // The new window opens where this one is.
+        self.save_settings();
         if matches!(self.updater.read(cx).state(), State::Ready(_)) {
             self.updater
                 .update(cx, |updater, cx| updater.install_now(cx));
@@ -510,6 +539,10 @@ impl Render for Arcwise {
         }
     }
 }
+
+/// How long the window must stay still before where it is gets saved. A move this soon before
+/// closing is not saved.
+const SAVE_AFTER_MOVE: Duration = Duration::from_millis(500);
 
 /// How long the window waits for the library read since launch before opening without it.
 const PRELOAD_WAIT: Duration = Duration::from_millis(100);

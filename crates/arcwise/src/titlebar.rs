@@ -133,15 +133,10 @@ fn button(area: WindowControlArea, icon: &'static [u8], active: bool) -> Statefu
 /// Windows otherwise follows the system's theme, and GPUI sets it again when that changes.
 #[cfg(windows)]
 pub fn sync_native(window: &Window) {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
     use windows::core::BOOL;
 
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return;
-    };
-    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+    let Some(hwnd) = crate::win::hwnd(window) else {
         return;
     };
     let dark = BOOL::from(theme::mode() == theme::Mode::Dark);
@@ -149,7 +144,7 @@ pub fn sync_native(window: &Window) {
     // for the call's duration.
     let _ = unsafe {
         DwmSetWindowAttribute(
-            HWND(handle.hwnd.get() as *mut _),
+            hwnd,
             DWMWA_USE_IMMERSIVE_DARK_MODE,
             (&raw const dark).cast(),
             size_of::<BOOL>() as u32,

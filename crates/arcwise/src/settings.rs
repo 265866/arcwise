@@ -6,6 +6,7 @@ use anyhow::Context as _;
 use arcwise_core::{AgentId, MapId, Side};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::placement::Placement;
 use crate::theme;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,6 +27,8 @@ pub struct Settings {
     pub theme: theme::Mode,
     /// Whether the header stands in for Windows' title bar; see [`crate::titlebar`].
     pub custom_title_bar: bool,
+    /// Where the window was when it last moved, to open there again.
+    pub window: Option<Placement>,
 }
 
 impl Default for Settings {
@@ -38,6 +41,7 @@ impl Default for Settings {
             auto_update: true,
             theme: theme::Mode::Dark,
             custom_title_bar: true,
+            window: None,
         }
     }
 }
@@ -85,12 +89,26 @@ impl Settings {
         self.write(&path)
     }
 
+    /// Saves only where the window is, over what is in the file, so another Arcwise's settings
+    /// saved since are kept.
+    pub fn save_window(&self) -> anyhow::Result<()> {
+        let path = Self::path().context("APPDATA is not set")?;
+        self.write_window(&path)
+    }
+
+    fn write_window(&self, path: &Path) -> anyhow::Result<()> {
+        let mut saved = Self::read(path).unwrap_or_else(|_| self.clone());
+        saved.window = self.window.clone();
+        saved.write(path)
+    }
+
     /// Writes beside the target and renames over it, so a crash never leaves half a file.
     pub fn write(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
-        let part = path.with_extension("json.part");
+        // Named for this process, so two Arcwise windows saving at once never write one file.
+        let part = path.with_extension(format!("json.{}.part", std::process::id()));
         std::fs::write(&part, serde_json::to_vec_pretty(self)?)
             .with_context(|| format!("writing {}", part.display()))?;
         std::fs::rename(&part, path).with_context(|| format!("replacing {}", path.display()))
@@ -117,10 +135,45 @@ mod tests {
             auto_update: false,
             theme: theme::Mode::Light,
             custom_title_bar: false,
+            window: Some(Placement {
+                x: -1200.,
+                y: 40.5,
+                width: 1300.,
+                height: 820.,
+                maximized: true,
+                monitor: Some("a1b2c3d4-0000-0000-0000-000000000002".into()),
+            }),
         };
         settings.write(&path).unwrap();
         assert_eq!(Settings::read(&path).unwrap(), settings);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn saving_the_window_keeps_what_another_arcwise_saved() {
+        let dir = std::env::temp_dir().join(format!("arcwise-window-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let other = Settings {
+            theme: theme::Mode::Light,
+            ..Settings::default()
+        };
+        other.write(&path).unwrap();
+        let this = Settings {
+            window: Some(Placement {
+                x: 10.,
+                y: 20.,
+                width: 1200.,
+                height: 800.,
+                maximized: false,
+                monitor: None,
+            }),
+            ..Settings::default()
+        };
+        this.write_window(&path).unwrap();
+        let read = Settings::read(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(read.theme, theme::Mode::Light, "the other's theme is kept");
+        assert_eq!(read.window, this.window);
     }
 
     #[test]

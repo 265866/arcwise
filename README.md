@@ -85,6 +85,9 @@ Arcwise's header doubles as its title bar: drag it to move the window, double-cl
 maximize, and use the minimize, maximize and close buttons at its right. To use Windows' own
 title bar instead, turn off **Custom title bar** in the settings menu and click **Relaunch**.
 
+Arcwise reopens where you left it: on the same monitor, at the same size, and maximized if it
+was. If that monitor isn't connected, it opens in the middle of your main one.
+
 ## Updates
 
 When an installed Arcwise opens, it asks GitHub whether a newer release exists. With
