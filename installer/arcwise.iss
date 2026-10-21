@@ -69,7 +69,7 @@ Name: "{autodesktop}\Arcwise"; Filename: "{app}\arcwise.exe"; Tasks: desktopicon
 [Run]
 Filename: "{app}\arcwise.exe"; Description: "{cm:LaunchProgram,Arcwise}"; Flags: nowait postinstall skipifsilent
 ; The app's updater installs silently with /RELAUNCH to open the new version afterwards.
-Filename: "{app}\arcwise.exe"; Flags: nowait; Check: WizardSilent and RelaunchRequested
+Filename: "{app}\arcwise.exe"; Parameters: "--resume"; Flags: nowait; Check: WizardSilent and RelaunchRequested
 
 [Code]
 function RelaunchRequested: Boolean;

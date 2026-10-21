@@ -30,7 +30,9 @@ use gpui::{
 
 use crate::drawn::Drawn;
 use crate::images::{Image, Images, Look, Picture};
+use crate::pacing::Speed;
 use crate::player::Player;
+use crate::settings::Settings;
 use crate::updater::Updater;
 use crate::{theme, titlebar, ui};
 use follow::Follow;
@@ -65,6 +67,10 @@ pub struct Browser {
     settings_open: bool,
     /// The settings window's tab, kept while it is closed to open on again.
     settings_tab: Tab,
+    /// Whether Arcwise opens where it was left, as the settings say.
+    reopen_last: bool,
+    /// The speed clips play at when Arcwise opens, as the settings say.
+    start_speed: Speed,
     /// The shortcut being chosen in the Keyboard tab.
     recording: Option<keyboard::Recording>,
     /// A shortcut chosen that another command already has, waiting for a yes or no.
@@ -76,6 +82,8 @@ pub struct Browser {
     _intercept: Subscription,
     /// Calls [`Browser::activation_changed`]; made on the first render, which has the window.
     activation: Option<Subscription>,
+    /// Redraws the Updates tab each minute while it says how long ago Arcwise checked.
+    minutes: Option<gpui::Task<()>>,
     /// What the settings window says about updates.
     updater: Entity<Updater>,
     /// Whether the pointer is dragging along the blur strength track.
@@ -139,10 +147,10 @@ pub struct SetAutoUpdate(pub bool);
 
 impl EventEmitter<SetAutoUpdate> for Browser {}
 
-/// Emitted when the user picks the dark or light theme, which [`crate::theme::mode`] already
-/// shows.
+/// Emitted when the user picks the dark or light theme, or Windows', which [`crate::theme::mode`]
+/// and [`crate::theme::follows_system`] already show.
 #[derive(Clone, Copy, Debug)]
-pub struct SetTheme(pub theme::Mode);
+pub struct SetTheme;
 
 impl EventEmitter<SetTheme> for Browser {}
 
@@ -160,6 +168,18 @@ pub struct SetShortcuts(pub BTreeMap<String, Vec<String>>);
 
 impl EventEmitter<SetShortcuts> for Browser {}
 
+/// Emitted when the user turns opening where they left off on or off.
+#[derive(Clone, Copy, Debug)]
+pub struct SetReopenLast(pub bool);
+
+impl EventEmitter<SetReopenLast> for Browser {}
+
+/// Emitted when the user picks the speed clips start at.
+#[derive(Clone, Copy, Debug)]
+pub struct SetStartSpeed(pub Speed);
+
+impl EventEmitter<SetStartSpeed> for Browser {}
+
 /// Emitted when the user asks Arcwise to relaunch, to apply a setting that needs a new window.
 #[derive(Clone, Copy, Debug)]
 pub struct Relaunch;
@@ -173,6 +193,7 @@ impl Browser {
         start: Start,
         pictures: Vec<Picture>,
         updater: Entity<Updater>,
+        settings: &Settings,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&updater, |_, _, cx| cx.notify()).detach();
@@ -198,15 +219,22 @@ impl Browser {
             hovered: None,
             peek_lineup: None,
             peek_view: None,
-            player: cx.new(|_| Player::new()),
+            player: cx.new(|cx| {
+                let mut player = Player::new();
+                player.set_speed(settings.start_speed, cx);
+                player
+            }),
             lightbox: None,
             settings_open: false,
             settings_tab: Tab::default(),
+            reopen_last: settings.reopen_last,
+            start_speed: settings.start_speed,
             recording: None,
             conflict: None,
             ended_by: None,
             _intercept: intercept,
             activation: None,
+            minutes: None,
             updater,
             strength_drag: false,
             slide: Slide::closed(),
@@ -475,6 +503,7 @@ impl Render for Browser {
                 this.activation_changed(cx);
             }));
         }
+        self.tick_minutes(cx);
         self.sync_player(window, cx);
         self.prefetch_map(cx);
         self.prefetch(cx);

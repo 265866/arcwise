@@ -15,7 +15,7 @@ use gpui::{
 use crate::args::Args;
 use crate::browser::{
     self, Browser, ChangeLibrary, Chosen, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength,
-    SetCustomTitleBar, SetShortcuts, SetTheme,
+    SetCustomTitleBar, SetReopenLast, SetShortcuts, SetStartSpeed, SetTheme,
 };
 use crate::images::{self, Picture};
 use crate::placement::Placement;
@@ -65,6 +65,8 @@ impl Arcwise {
             updater,
             save_window: None,
         };
+        // The window took Windows' theme as it opened, which may have changed since the last run.
+        this.theme_followed();
         match args {
             Err(problem) => {
                 this.screen = Screen::Welcome {
@@ -150,7 +152,9 @@ impl Arcwise {
                 self.start = None;
                 let library = Arc::new(library);
                 let updater = self.updater.clone();
-                let browser = cx.new(|cx| Browser::new(library, start, pictures, updater, cx));
+                let settings = &self.settings;
+                let browser =
+                    cx.new(|cx| Browser::new(library, start, pictures, updater, settings, cx));
                 cx.subscribe(&browser, |this, _, chosen: &Chosen, _| {
                     this.settings.last = Some(Last {
                         map: chosen.map.clone(),
@@ -185,10 +189,27 @@ impl Arcwise {
                     },
                 )
                 .detach();
-                cx.subscribe(&browser, |this, _, &SetTheme(mode): &SetTheme, _| {
-                    this.settings.theme = mode;
+                cx.subscribe(&browser, |this, _, _: &SetTheme, _| {
+                    this.settings.theme = theme::mode();
+                    this.settings.follow_system_theme = theme::follows_system();
                     this.save_settings();
                 })
+                .detach();
+                cx.subscribe(
+                    &browser,
+                    |this, _, &SetReopenLast(on): &SetReopenLast, _| {
+                        this.settings.reopen_last = on;
+                        this.save_settings();
+                    },
+                )
+                .detach();
+                cx.subscribe(
+                    &browser,
+                    |this, _, &SetStartSpeed(speed): &SetStartSpeed, _| {
+                        this.settings.start_speed = speed;
+                        this.save_settings();
+                    },
+                )
                 .detach();
                 cx.subscribe(
                     &browser,
@@ -421,6 +442,19 @@ impl Arcwise {
         )
     }
 
+    /// Saves the theme the window shows now, after it followed Windows', so the next launch starts
+    /// on it before the window can say. Only the theme, over the file, since nobody changed a
+    /// setting here and another Arcwise may have since.
+    pub fn theme_followed(&mut self) {
+        if self.settings.theme == theme::mode() {
+            return;
+        }
+        self.settings.theme = theme::mode();
+        if let Err(e) = self.settings.save_theme() {
+            eprintln!("arcwise: could not save the theme: {e:#}");
+        }
+    }
+
     fn save_settings(&self) {
         if let Err(e) = self.settings.save() {
             eprintln!("arcwise: could not save settings: {e:#}");
@@ -462,7 +496,9 @@ impl Arcwise {
                 .update(cx, |updater, cx| updater.install_now(cx));
             return;
         }
-        match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).spawn()) {
+        let relaunched = std::env::current_exe()
+            .and_then(|exe| std::process::Command::new(exe).arg("--resume").spawn());
+        match relaunched {
             Ok(_) => cx.quit(),
             Err(e) => eprintln!("arcwise: could not relaunch: {e}"),
         }
@@ -608,10 +644,9 @@ pub struct Opened {
 
 impl Request {
     pub fn new(path: PathBuf, args: Args, settings: &Settings) -> Request {
-        let last = settings
-            .last
-            .clone()
-            .filter(|_| settings.library.as_ref() == Some(&path));
+        let last = settings.last.clone().filter(|_| {
+            (settings.reopen_last || args.resume) && settings.library.as_ref() == Some(&path)
+        });
         Request { path, args, last }
     }
 
@@ -733,6 +768,25 @@ mod tests {
         let start = start(&library(), args, Some(last()));
         assert_eq!(start.lineup, Some(LineupId(5)));
         assert_eq!(start.map, None);
+    }
+
+    #[test]
+    fn opening_where_it_was_left_can_be_turned_off() {
+        let path = PathBuf::from("lib");
+        let settings = Settings {
+            library: Some(path.clone()),
+            last: Some(last()),
+            reopen_last: false,
+            ..Settings::default()
+        };
+        let request = Request::new(path.clone(), Args::default(), &settings);
+        assert_eq!(request.last, None);
+        // Relaunching to apply a setting or an update still goes back there.
+        let resume = Args {
+            resume: true,
+            ..Args::default()
+        };
+        assert_eq!(Request::new(path, resume, &settings).last, Some(last()));
     }
 
     #[test]

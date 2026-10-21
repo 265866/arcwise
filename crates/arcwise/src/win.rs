@@ -3,7 +3,9 @@
 use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::HWND;
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::UI::Input::KeyboardAndMouse::{MAPVK_VK_TO_CHAR, MapVirtualKeyW, VkKeyScanW};
+use windows::core::w;
 
 /// `window`'s handle. `Window` has its own `window_handle`, GPUI's, so the trait's is named.
 pub fn hwnd(window: &Window) -> Option<HWND> {
@@ -12,6 +14,27 @@ pub fn hwnd(window: &Window) -> Option<HWND> {
         RawWindowHandle::Win32(handle) => Some(HWND(handle.hwnd.get() as *mut _)),
         _ => None,
     }
+}
+
+/// Whether Windows' apps use the light theme, from the setting Windows keeps for it, for when no
+/// window is open yet to ask.
+pub fn apps_use_light_theme() -> Option<bool> {
+    let mut value = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: the key and value names are static wide strings, and `value` is a DWORD with its
+    // size in `size`, as RRF_RT_REG_DWORD writes.
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&raw mut size),
+        )
+    };
+    read.is_ok().then_some(value != 0)
 }
 
 /// The key that types `symbol` with Shift in the keyboard layout in use, such as `1` for `!` on a

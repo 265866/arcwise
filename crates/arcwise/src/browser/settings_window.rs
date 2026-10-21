@@ -9,9 +9,11 @@ use gpui::{
 
 use super::{
     Browser, ChangeLibrary, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength, SetCustomTitleBar,
-    SetTheme, plural,
+    SetReopenLast, SetStartSpeed, SetTheme, plural,
 };
+use crate::pacing::Speed;
 use crate::settings::Settings;
+use crate::shortcuts::{Command, Shortcuts};
 use crate::updater::State;
 use crate::{theme, titlebar, ui, update};
 
@@ -31,6 +33,7 @@ const LOGO_DIAMOND: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox
 const FOLDER: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="#000" stroke-width="2" stroke-linejoin="round"/></svg>"##;
 const CONTRAST: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="#000" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 0 0 17z"/></svg>"##;
 const UPDATES: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="#000" stroke-width="2"/><path d="M12 16V8.5M8.75 11.5 12 8.25l3.25 3.25" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+const PLAYBACK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="#000" stroke-width="2"/><path d="M10 9.2v5.6l4.6-2.8z"/></svg>"##;
 const KEYBOARD: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="#000" stroke-width="2"/><path d="M6.5 10h.01M10.5 10h.01M14.5 10h.01M18 10h.01M7.5 14h9" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round"/></svg>"##;
 /// A cross, on the button that closes the window.
 const CROSS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/></svg>"##;
@@ -48,17 +51,25 @@ pub enum Tab {
     #[default]
     General,
     Appearance,
+    Playback,
     Keyboard,
     Updates,
 }
 
 impl Tab {
-    const ALL: [Tab; 4] = [Tab::General, Tab::Appearance, Tab::Keyboard, Tab::Updates];
+    const ALL: [Tab; 5] = [
+        Tab::General,
+        Tab::Appearance,
+        Tab::Playback,
+        Tab::Keyboard,
+        Tab::Updates,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             Tab::General => "General",
             Tab::Appearance => "Appearance",
+            Tab::Playback => "Playback",
             Tab::Keyboard => "Keyboard",
             Tab::Updates => "Updates",
         }
@@ -68,6 +79,7 @@ impl Tab {
         match self {
             Tab::General => FOLDER,
             Tab::Appearance => CONTRAST,
+            Tab::Playback => PLAYBACK,
             Tab::Keyboard => KEYBOARD,
             Tab::Updates => UPDATES,
         }
@@ -164,6 +176,32 @@ impl Browser {
         self.settings_open
     }
 
+    /// Keeps the Updates tab's "Checked N minutes ago" current while it shows, and stops when it
+    /// does not.
+    pub(super) fn tick_minutes(&mut self, cx: &mut Context<Self>) {
+        let showing = self.settings_open
+            && self.settings_tab == Tab::Updates
+            && self.updater.read(cx).checked().is_some();
+        if !showing {
+            // Dropping the task stops it.
+            self.minutes = None;
+        } else if self.minutes.is_none() {
+            self.minutes = Some(cx.spawn(async move |this, cx| {
+                // Wakes just past each whole minute since the check, which a later check moves.
+                while let Ok(Some(wait)) = this.update(cx, |this, cx| {
+                    let since = this.updater.read(cx).checked()?.at.elapsed().as_millis();
+                    let to_minute = 60_000 - (since % 60_000) as u64;
+                    Some(std::time::Duration::from_millis(to_minute + 50))
+                }) {
+                    cx.background_executor().timer(wait).await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+    }
+
     pub(super) fn close_settings(&mut self, cx: &mut Context<Self>) {
         self.end_strength_drag(cx);
         self.stop_recording();
@@ -185,6 +223,7 @@ impl Browser {
         let body = match tab {
             Tab::General => self.general(cx),
             Tab::Appearance => self.appearance(cx),
+            Tab::Playback => self.playback(cx),
             Tab::Keyboard => self.keyboard(window, cx),
             Tab::Updates => self.updates(cx),
         };
@@ -386,6 +425,58 @@ impl Browser {
                     .into_any_element(),
             ],
         )
+        .child(group(
+            "When Arcwise opens",
+            vec![
+                toggle(
+                    "reopen-last",
+                    "Open where I left off",
+                    "The map, agent and side you had open last",
+                )
+                .child(switch(self.reopen_last))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.reopen_last = !this.reopen_last;
+                    cx.emit(SetReopenLast(this.reopen_last));
+                    cx.notify();
+                }))
+                .into_any_element(),
+            ],
+        ))
+        .into_any_element()
+    }
+
+    fn playback(&self, cx: &mut Context<Self>) -> AnyElement {
+        let about: SharedString = match cx.global::<Shortcuts>().first(Command::SlowMotion) {
+            Some(key) => format!(
+                "The speed clips play at when Arcwise opens. {} changes it as one plays",
+                key.label()
+            )
+            .into(),
+            None => "The speed clips play at when Arcwise opens".into(),
+        };
+        let buttons = Speed::ALL.map(|speed| {
+            let on = speed == self.start_speed;
+            choice(SharedString::from(speed.label()), on).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    if this.start_speed != speed {
+                        this.start_speed = speed;
+                        this.player
+                            .update(cx, |player, cx| player.set_speed(speed, cx));
+                        cx.emit(SetStartSpeed(speed));
+                        cx.notify();
+                    }
+                },
+            ))
+        });
+        group(
+            "Clips",
+            vec![
+                setting()
+                    .child(described("Starting speed", about))
+                    .child(segmented().children(buttons))
+                    .into_any_element(),
+            ],
+        )
         .into_any_element()
     }
 
@@ -440,16 +531,10 @@ impl Browser {
                     setting()
                         .child(name("Theme"))
                         .child(
-                            div()
-                                .flex()
-                                .gap(px(2.))
-                                .p(px(3.))
-                                .rounded(px(8.))
-                                .border_1()
-                                .border_color(theme::line_hover())
-                                .bg(theme::panel())
-                                .child(mode_button(theme::Mode::Dark, "Dark", cx))
-                                .child(mode_button(theme::Mode::Light, "Light", cx)),
+                            segmented()
+                                .child(mode_button(Some(theme::Mode::Dark), "Dark", cx))
+                                .child(mode_button(Some(theme::Mode::Light), "Light", cx))
+                                .child(mode_button(None, "System", cx)),
                         )
                         .into_any_element(),
                 ],
@@ -466,11 +551,31 @@ impl Browser {
         } else {
             "Says when a new version is out, and installs it when you ask"
         };
-        let running = if update::installed() {
-            None
+        let installed = update::installed();
+        let status: SharedString = if !installed {
+            "Not run from where it was installed, so it does not update itself".into()
+        } else if updater.checking() {
+            "Looking for a newer version…".into()
         } else {
-            Some("Not run from where it was installed, so it does not update itself")
+            match updater.checked() {
+                None => "The version running now".into(),
+                Some(checked) if checked.failed => {
+                    "Could not reach GitHub to look for updates".into()
+                }
+                Some(checked) => {
+                    let when = match checked.at.elapsed().as_secs() / 60 {
+                        0 => "just now".to_owned(),
+                        1 => "a minute ago".to_owned(),
+                        n => format!("{n} minutes ago"),
+                    };
+                    match updater.state() {
+                        State::UpToDate => format!("Up to date. Checked {when}").into(),
+                        _ => format!("Checked {when}").into(),
+                    }
+                }
+            }
         };
+        let can_check = updater.can_check();
         let newer = match updater.state() {
             State::UpToDate => None,
             State::Available(version) => Some((
@@ -536,8 +641,33 @@ impl Browser {
                         .child(logo(px(20.)))
                         .child(described(
                             concat!("Arcwise ", env!("CARGO_PKG_VERSION")),
-                            running.unwrap_or("The version running now"),
+                            status,
                         ))
+                        .when(installed, |row| {
+                            row.child(
+                                ui::button("check-now", "Check now")
+                                    .h(px(32.))
+                                    .px(px(12.))
+                                    .text_size(px(13.))
+                                    .when(!can_check, |b| b.opacity(0.45))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.updater.update(cx, |u, cx| u.check(cx));
+                                    })),
+                            )
+                        })
+                        .into_any_element(),
+                    setting()
+                        .child(described(
+                            "What's new",
+                            "What each version changed, on GitHub",
+                        ))
+                        .child(
+                            ui::button("whats-new", "Open")
+                                .h(px(32.))
+                                .px(px(12.))
+                                .text_size(px(13.))
+                                .on_click(|_, _, cx| cx.open_url(update::RELEASES)),
+                        )
                         .into_any_element(),
                 ],
             ))
@@ -796,11 +926,51 @@ fn text_button(id: &'static str, label: &'static str) -> Stateful<Div> {
         .child(label)
 }
 
-/// One side of the theme picker, which switches every color at once.
-fn mode_button(mode: theme::Mode, label: &'static str, cx: &mut Context<Browser>) -> Stateful<Div> {
-    let on = theme::mode() == mode;
+/// One choice in the theme picker, which switches every color at once: a theme, or with `None`,
+/// whichever Windows uses.
+fn mode_button(
+    mode: Option<theme::Mode>,
+    label: &'static str,
+    cx: &mut Context<Browser>,
+) -> Stateful<Div> {
+    let chosen = move || match mode {
+        None => theme::follows_system(),
+        Some(mode) => !theme::follows_system() && theme::mode() == mode,
+    };
+    choice(label.into(), chosen()).on_click(cx.listener(move |_, _, window, cx| {
+        if chosen() {
+            return;
+        }
+        theme::set_follow_system(mode.is_none());
+        match mode {
+            Some(mode) => theme::set_mode(mode),
+            None => {
+                theme::sync_system(window);
+            }
+        }
+        titlebar::sync_native(window);
+        // Every view draws again, cached ones too, in the new colors.
+        window.refresh();
+        cx.emit(SetTheme);
+    }))
+}
+
+/// A row of [`choice`]s, framed together.
+fn segmented() -> Div {
     div()
-        .id(label)
+        .flex()
+        .gap(px(2.))
+        .p(px(3.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme::line_hover())
+        .bg(theme::panel())
+}
+
+/// One of a few choices side by side, of which one is `on`.
+fn choice(label: SharedString, on: bool) -> Stateful<Div> {
+    div()
+        .id(label.clone())
         .h(px(26.))
         .px(px(12.))
         .flex()
@@ -814,16 +984,6 @@ fn mode_button(mode: theme::Mode, label: &'static str, cx: &mut Context<Browser>
             d.cursor_pointer().hover(|s| s.text_color(theme::text()))
         })
         .child(label)
-        .on_click(cx.listener(move |_, _, window, cx| {
-            if theme::mode() == mode {
-                return;
-            }
-            theme::set_mode(mode);
-            titlebar::sync_native(window);
-            // Every view draws again, cached ones too, in the new colors.
-            window.refresh();
-            cx.emit(SetTheme(mode));
-        }))
 }
 
 /// An on and off switch.

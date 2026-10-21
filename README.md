@@ -44,7 +44,8 @@ file's line. The hash in `SHA256SUMS.txt` is lowercase.
 ## What it does
 
 - **Map first, then agent.** The first run asks for a map, then an agent who has lineups on it.
-  After that the header's pickers open as dropdowns, and Arcwise reopens where you left off.
+  After that the header's pickers open as dropdowns, and Arcwise reopens where you left off,
+  unless **Open where I left off** is turned off under **General** in the settings.
 - **Every landing on the map.** Lineups of one ability that land in the same place share a marker,
   with a count. Point at one to see what lands there and where it is thrown from.
 - **Each stand spot for a landing.** Select a landing to see its stand spots, numbered, with the
@@ -84,8 +85,12 @@ the folder. To open another one, open the settings with the gear at the top righ
 
 ## Appearance
 
-The settings' **Appearance** tab switches between the dark theme, which Arcwise starts with, and
-a light one. It also turns background blur on or off and sets how much of it shows.
+The settings' **Appearance** tab switches between the dark theme, which Arcwise starts with, a
+light one, and **System**, which follows Windows' light or dark mode as it changes. It also turns
+background blur on or off and sets how much of it shows.
+
+Under **Playback**, **Starting speed** sets the speed clips play at when Arcwise opens: full,
+half or a quarter. Slow motion still changes it as a clip plays.
 
 Arcwise's header doubles as its title bar: drag it to move the window, double-click it to
 maximize, and use the minimize, maximize and close buttons at its right. To use Windows' own
@@ -107,7 +112,8 @@ the releases page instead.
 With **Automatic updates** off, a message says a new version is available. Either way, a badge
 shows on the settings gear until the new version is installed, and the **Updates** tab shows the
 version you have and the new one, with a button that updates Arcwise and relaunches it. After an
-update, Arcwise says which version it is now.
+update, Arcwise says which version it is now. **Check now** asks GitHub at once, and
+**What's new** opens the list of releases.
 
 An `arcwise.exe` run from the zip doesn't update itself. Get new versions from the
 [releases page](https://github.com/265866/arcwise/releases/latest).

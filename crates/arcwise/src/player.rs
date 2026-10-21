@@ -234,6 +234,11 @@ impl Player {
         }
     }
 
+    pub fn set_speed(&mut self, speed: Speed, cx: &mut Context<Self>) {
+        self.pacing.set_speed(speed, Instant::now());
+        cx.notify();
+    }
+
     pub fn cycle_speed(&mut self, cx: &mut Context<Self>) {
         self.pacing
             .set_speed(self.pacing.speed().next(), Instant::now());

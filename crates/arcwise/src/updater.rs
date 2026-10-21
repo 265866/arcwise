@@ -1,11 +1,11 @@
 //! What Arcwise knows about updates, shared by the window, which shows toasts, and the settings
-//! menu, which shows the version and an install button. Arcwise looks for a newer version when it
-//! opens and every [`CHECK_EVERY`] while it stays open. With automatic updates on, a newer version
-//! downloads in the background, a toast says it is ready, and it installs when Arcwise closes.
-//! With them off, a toast says it exists and the settings menu offers to install it. Either way
-//! the settings gear wears a badge until it is installed.
+//! window, which shows the version and an install button. Arcwise looks for a newer version when
+//! it opens, every [`CHECK_EVERY`] while it stays open, and when asked to. With automatic updates
+//! on, a newer version downloads in the background, a toast says it is ready, and it installs when
+//! Arcwise closes. With them off, a toast says it exists and the settings window offers to install
+//! it. Either way the settings gear wears a badge until it is installed.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{AsyncApp, Context, WeakEntity, prelude::*};
 use semver::Version;
@@ -26,6 +26,18 @@ pub struct Updater {
     toasts: u64,
     /// A version whose download could not be verified, not tried again until a newer one is out.
     refused: Option<Version>,
+    /// Whether GitHub is being asked now.
+    checking: bool,
+    /// When GitHub last answered, or failed to.
+    checked: Option<Checked>,
+}
+
+/// The last time Arcwise looked for a newer version.
+#[derive(Clone, Copy, Debug)]
+pub struct Checked {
+    pub at: Instant,
+    /// GitHub did not answer, as when offline.
+    pub failed: bool,
 }
 
 pub enum State {
@@ -66,33 +78,63 @@ impl Updater {
             toast: None,
             toasts: 0,
             refused: None,
+            checking: false,
+            checked: None,
         };
         if let Some(version) = updated {
             this.show(Toast::Updated(version), cx);
         }
-        if update::installed()
-            && let Some(dir) = update::directory()
-        {
+        if update::installed() {
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                loop {
-                    let Ok(check) = this.read_with(cx, |this, _| this.checks()) else {
-                        break;
-                    };
-                    if check {
-                        let (current, dir) = (update::current_version(), dir.clone());
-                        let latest = cx
-                            .background_spawn(async move { update::latest(&current, &dir) })
-                            .await;
-                        if this.update(cx, |this, cx| this.found(latest, cx)).is_err() {
-                            break;
-                        }
-                    }
+                while this.update(cx, |this, cx| this.check(cx)).is_ok() {
                     cx.background_executor().timer(CHECK_EVERY).await;
                 }
             })
             .detach();
         }
         this
+    }
+
+    /// Whether asking GitHub now would do anything: not for a copy that does not update itself,
+    /// while it is being asked, or while a newer version is downloading or downloaded.
+    pub fn can_check(&self) -> bool {
+        update::installed() && !self.checking && self.checks()
+    }
+
+    /// Asks GitHub for a newer version now, when [`Updater::can_check`].
+    pub fn check(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = update::directory() else {
+            return;
+        };
+        if !self.can_check() {
+            return;
+        }
+        self.checking = true;
+        cx.notify();
+        let current = update::current_version();
+        let task = cx.background_spawn(async move { update::latest(&current, &dir) });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let latest = task.await;
+            this.update(cx, |this, cx| {
+                this.checking = false;
+                this.checked = Some(Checked {
+                    at: Instant::now(),
+                    failed: latest.is_err(),
+                });
+                this.found(latest, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn checking(&self) -> bool {
+        self.checking
+    }
+
+    pub fn checked(&self) -> Option<Checked> {
+        self.checked
     }
 
     /// Whether to look for a newer version: not while one is downloading or downloaded, which
