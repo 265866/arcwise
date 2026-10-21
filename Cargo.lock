@@ -142,6 +142,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "libwebp-sys",
+ "raw-window-handle",
  "resvg",
  "rustls",
  "semver",

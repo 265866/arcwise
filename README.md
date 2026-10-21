@@ -74,8 +74,16 @@ file's line. The hash in `SHA256SUMS.txt` is lowercase.
 
 Arcwise does not come with lineups or download any. It reads a library folder on your computer;
 [docs/library-format.md](docs/library-format.md) describes the layout. On first run it asks for
-the folder, and the settings menu, behind the gear at the top right, opens another one. The
-same menu turns background blur on or off and sets how much of it shows.
+the folder, and the settings menu, behind the gear at the top right, opens another one.
+
+## Appearance
+
+The settings menu switches between the dark theme, which Arcwise starts with, and a light one.
+It also turns background blur on or off and sets how much of it shows.
+
+Arcwise's header doubles as its title bar: drag it to move the window, double-click it to
+maximize, and use the minimize, maximize and close buttons at its right. To use Windows' own
+title bar instead, turn off **Custom title bar** in the settings menu and click **Relaunch**.
 
 ## Updates
 

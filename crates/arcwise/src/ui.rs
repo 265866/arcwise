@@ -148,7 +148,7 @@ pub fn face(
         .font_family(theme::DISPLAY_FONT)
         .font_weight(FontWeight::EXTRA_BOLD)
         .text_size(size * 0.38)
-        .text_color(theme::mix(color, gpui::white(), 0.7))
+        .text_color(theme::mix(color, theme::text(), 0.7))
         .child(initial)
         .children(portrait.map(|p| {
             div()
@@ -222,7 +222,7 @@ pub fn kbd(key: impl Into<SharedString>, lit: bool) -> Div {
         .child(key.into())
 }
 
-/// A play triangle centered in its parent.
+/// A play triangle centered in its parent, over a picture or clip, which is dark in either theme.
 pub fn play_glyph(size: Pixels) -> impl IntoElement {
     div()
         .absolute()
@@ -230,7 +230,12 @@ pub fn play_glyph(size: Pixels) -> impl IntoElement {
         .flex()
         .items_center()
         .justify_center()
-        .child(svg().data(PLAY).size(size).text_color(theme::text()))
+        .child(
+            svg()
+                .data(PLAY)
+                .size(size)
+                .text_color(gpui::rgb(theme::DARK.text)),
+        )
 }
 
 /// A short arrow fading from `from` to `to`, pointing right.
@@ -265,8 +270,9 @@ pub fn arrow(from: impl Into<Hsla>, to: impl Into<Hsla>) -> Div {
         )
 }
 
-/// A turning ring, centered in its parent, for something on its way.
-pub fn spinner(size: Pixels) -> impl IntoElement {
+/// A turning ring in `color`, centered in its parent, for something on its way.
+pub fn spinner(size: Pixels, color: impl Into<Hsla>) -> impl IntoElement {
+    let color = color.into();
     // Turns once every 800 ms, measured from a fixed point so redraws do not restart it.
     static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let t = EPOCH
@@ -289,14 +295,14 @@ pub fn spinner(size: Pixels) -> impl IntoElement {
                         .data(RING)
                         .absolute()
                         .inset_0()
-                        .text_color(theme::alpha(gpui::white(), 0.19)),
+                        .text_color(theme::alpha(color, 0.19)),
                 )
                 .child(
                     svg()
                         .data(ARC)
                         .absolute()
                         .inset_0()
-                        .text_color(theme::text())
+                        .text_color(color)
                         .with_transformation(Transformation::rotate(gpui::radians(turn))),
                 )
                 // Draws the next turn on the next frame.

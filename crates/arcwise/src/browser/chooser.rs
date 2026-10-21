@@ -89,15 +89,19 @@ impl Browser {
                 .into_any_element()
         } else {
             let card = self.chooser_card(which, false, window, cx);
+            // Below the header, which stays usable as the window's title bar.
             div()
                 .id("chooser")
                 .absolute()
-                .inset_0()
+                .top(ui::BAR_HEIGHT)
+                .left_0()
+                .right_0()
+                .bottom_0()
                 .flex()
                 .items_center()
                 .justify_center()
                 .p(px(24.))
-                .bg(theme::alpha(gpui::rgb(0x05070a), 0.6))
+                .bg(theme::scrim())
                 .occlude()
                 .on_mouse_down(MouseButton::Left, dismiss)
                 .child(card)
@@ -247,6 +251,10 @@ impl Browser {
                                     this.images.update(cx, |images, cx| {
                                         for icon in &icons {
                                             images.fetch(icon, Look::Plain, cx);
+                                            // The light theme draws them black on its chips.
+                                            if theme::mode() == theme::Mode::Light {
+                                                images.fetch(icon, Look::Silhouette, cx);
+                                            }
                                         }
                                     });
                                 }

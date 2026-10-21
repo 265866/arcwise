@@ -72,9 +72,7 @@ impl Browser {
 
     fn panel_head(&self, lineup: &Lineup, color: Hsla, cx: &mut Context<Self>) -> Div {
         let ability = self.library.ability(lineup.ability);
-        let icon = self
-            .image(&self.library.ability_icon(lineup.ability), cx)
-            .ready();
+        let icon = self.chip_icon(lineup.ability, cx).ready();
         div()
             .flex()
             .flex_wrap()
@@ -90,7 +88,7 @@ impl Browser {
                     .pr(px(10.))
                     .rounded(px(6.))
                     .bg(theme::alpha(color, 0.16))
-                    .text_color(color)
+                    .text_color(theme::readable(color))
                     .text_size(px(12.))
                     .font_weight(FontWeight::BOLD)
                     .children(icon.map(|icon| {
@@ -102,8 +100,8 @@ impl Browser {
             )
             .children(lineup.tags.iter().filter_map(|tag| {
                 let (label, color) = match tag {
-                    Tag::Essential => ("Essential", gpui::rgb(0xf5c76a)),
-                    Tag::Pro => ("Pro", gpui::rgb(0xb99cff)),
+                    Tag::Essential => ("Essential", theme::essential()),
+                    Tag::Pro => ("Pro", theme::pro()),
                     Tag::Other => return None,
                 };
                 Some(
@@ -150,7 +148,7 @@ impl Browser {
                     .cursor_pointer()
                     .hover(|s| {
                         s.text_color(theme::text())
-                            .border_color(gpui::rgb(0x344050))
+                            .border_color(theme::line_strong())
                     })
                     .child(number_box(i + 1, on.then_some(color)))
                     .child(place(lineup.stand.callout.as_deref()))
@@ -444,6 +442,7 @@ fn note_box(note: impl Into<SharedString>) -> Div {
         .py(px(6.))
         .rounded(px(7.))
         .bg(theme::alpha(gpui::black(), 0.78))
+        .text_color(gpui::rgb(theme::DARK.text))
         .text_size(px(13.))
         .child(note.into())
 }
@@ -525,7 +524,7 @@ fn technique(lineup: &Lineup, color: Hsla) -> Option<Div> {
                         div()
                             .w(px(14.))
                             .flex_none()
-                            .text_color(color)
+                            .text_color(theme::readable(color))
                             .font_weight(FontWeight::BOLD)
                             .child(format!("{}.", i + 1)),
                     )

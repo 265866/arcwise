@@ -22,6 +22,10 @@ pub struct Settings {
     pub blur_strength: u8,
     /// Whether Arcwise updates itself; see [`crate::updater`].
     pub auto_update: bool,
+    /// The dark or light theme; see [`theme::mode`].
+    pub theme: theme::Mode,
+    /// Whether the header stands in for Windows' title bar; see [`crate::titlebar`].
+    pub custom_title_bar: bool,
 }
 
 impl Default for Settings {
@@ -32,6 +36,8 @@ impl Default for Settings {
             blur: true,
             blur_strength: theme::DEFAULT_STRENGTH,
             auto_update: true,
+            theme: theme::Mode::Dark,
+            custom_title_bar: true,
         }
     }
 }
@@ -109,6 +115,8 @@ mod tests {
             blur: false,
             blur_strength: 30,
             auto_update: false,
+            theme: theme::Mode::Light,
+            custom_title_bar: false,
         };
         settings.write(&path).unwrap();
         assert_eq!(Settings::read(&path).unwrap(), settings);
@@ -122,6 +130,11 @@ mod tests {
         assert!(settings.blur, "blur is on until turned off");
         assert_eq!(settings.blur_strength, theme::DEFAULT_STRENGTH);
         assert!(settings.auto_update, "updates are on until turned off");
+        assert_eq!(settings.theme, theme::Mode::Dark, "dark until changed");
+        assert!(
+            settings.custom_title_bar,
+            "the header is the title bar until changed"
+        );
     }
 
     #[test]
@@ -154,5 +167,17 @@ mod tests {
             serde_json::from_str(r#"{"blur": false, "blur_strength": 30}"#).unwrap();
         assert!(!settings.blur);
         assert!(settings.auto_update);
+    }
+
+    #[test]
+    fn saves_the_theme_by_name() {
+        let settings = Settings {
+            theme: theme::Mode::Light,
+            ..Settings::default()
+        };
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["theme"], "light");
+        let read: Settings = serde_json::from_str(r#"{"theme": "dark"}"#).unwrap();
+        assert_eq!(read.theme, theme::Mode::Dark);
     }
 }

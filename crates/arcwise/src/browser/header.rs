@@ -39,6 +39,8 @@ impl Browser {
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
                 this.menu_open = false;
+                // The header stays usable over an enlarged picture, which a new choice puts away.
+                this.lightbox = None;
                 this.browse.toggle_chooser(&this.library, Chooser::Map);
                 cx.notify();
             }),
@@ -70,6 +72,7 @@ impl Browser {
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
                 this.menu_open = false;
+                this.lightbox = None;
                 this.browse.toggle_chooser(&this.library, Chooser::Agent);
                 cx.notify();
             }),
@@ -113,6 +116,7 @@ impl Browser {
                 .child(side.label())
                 .child(ui::num(count.to_string()))
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    this.lightbox = None;
                     this.browse.set_side(&this.library, side);
                     cx.notify();
                 }))
@@ -121,6 +125,7 @@ impl Browser {
             div()
                 .flex()
                 .gap(px(4.))
+                .occlude()
                 .ml(px(6.))
                 .p(px(4.))
                 .rounded(px(10.))
@@ -143,6 +148,8 @@ fn picker(
 ) -> gpui::Stateful<Div> {
     div()
         .id(id)
+        // Over the header, which moves the window where nothing else is.
+        .occlude()
         .relative()
         .flex()
         .items_center()

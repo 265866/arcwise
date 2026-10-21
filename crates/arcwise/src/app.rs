@@ -14,12 +14,13 @@ use gpui::{
 
 use crate::args::Args;
 use crate::browser::{
-    self, Browser, ChangeLibrary, Chosen, SetAutoUpdate, SetBlur, SetBlurStrength,
+    self, Browser, ChangeLibrary, Chosen, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength,
+    SetCustomTitleBar, SetTheme,
 };
 use crate::images::{self, Picture};
 use crate::settings::{Last, Settings};
-use crate::updater::{TOAST_LIFETIME, Toast, Updater};
-use crate::{theme, trace, ui, update};
+use crate::updater::{State, TOAST_LIFETIME, Toast, Updater};
+use crate::{theme, titlebar, trace, ui, update};
 
 enum Screen {
     /// No library yet, or the last one failed to load.
@@ -179,6 +180,21 @@ impl Arcwise {
                     },
                 )
                 .detach();
+                cx.subscribe(&browser, |this, _, &SetTheme(mode): &SetTheme, _| {
+                    this.settings.theme = mode;
+                    this.save_settings();
+                })
+                .detach();
+                cx.subscribe(
+                    &browser,
+                    |this, _, &SetCustomTitleBar(on): &SetCustomTitleBar, _| {
+                        this.settings.custom_title_bar = on;
+                        this.save_settings();
+                    },
+                )
+                .detach();
+                cx.subscribe(&browser, |this, _, _: &Relaunch, cx| this.relaunch(cx))
+                    .detach();
                 if let Screen::Browsing(old) = &self.screen {
                     old.update(cx, |old, cx| old.release_all(cx));
                 }
@@ -365,6 +381,20 @@ impl Arcwise {
         }
     }
 
+    /// Opens a new Arcwise and closes this one, which reopens where it was from the settings. A
+    /// downloaded update installs instead, and the installer opens the new version.
+    fn relaunch(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.updater.read(cx).state(), State::Ready(_)) {
+            self.updater
+                .update(cx, |updater, cx| updater.install_now(cx));
+            return;
+        }
+        match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).spawn()) {
+            Ok(_) => cx.quit(),
+            Err(e) => eprintln!("arcwise: could not relaunch: {e}"),
+        }
+    }
+
     fn choose_folder(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.pick_folder(cx);
     }
@@ -469,7 +499,7 @@ impl Render for Arcwise {
                 Screen::Browsing(_) => unreachable!("rendered above"),
             };
             root.relative()
-                .child(ui::bar())
+                .child(titlebar::frame(ui::bar(), window))
                 .child(div().flex_1().min_h_0().child(body))
         };
         let root = root.children(self.update_toast(cx));

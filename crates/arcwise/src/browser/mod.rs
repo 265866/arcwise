@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arcwise_core::{
-    AgentId, Browse, LandingKey, Library, Lineup, LineupId, MapId, Side, Start, View,
+    AbilityId, AgentId, Browse, LandingKey, Library, Lineup, LineupId, MapId, Side, Start, View,
 };
 use gpui::{
     Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Pixels,
@@ -29,8 +29,8 @@ use gpui::{
 use crate::drawn::Drawn;
 use crate::images::{Image, Images, Look, Picture};
 use crate::player::Player;
-use crate::ui;
 use crate::updater::Updater;
+use crate::{theme, titlebar, ui};
 use follow::Follow;
 use part::Part;
 use slide::Slide;
@@ -124,6 +124,26 @@ pub struct SetAutoUpdate(pub bool);
 
 impl EventEmitter<SetAutoUpdate> for Browser {}
 
+/// Emitted when the user picks the dark or light theme, which [`crate::theme::mode`] already
+/// shows.
+#[derive(Clone, Copy, Debug)]
+pub struct SetTheme(pub theme::Mode);
+
+impl EventEmitter<SetTheme> for Browser {}
+
+/// Emitted when the user turns the custom title bar on or off, which
+/// [`crate::titlebar::chosen`] already shows. It takes effect when Arcwise relaunches.
+#[derive(Clone, Copy, Debug)]
+pub struct SetCustomTitleBar(pub bool);
+
+impl EventEmitter<SetCustomTitleBar> for Browser {}
+
+/// Emitted when the user asks Arcwise to relaunch, to apply a setting that needs a new window.
+#[derive(Clone, Copy, Debug)]
+pub struct Relaunch;
+
+impl EventEmitter<Relaunch> for Browser {}
+
 impl Browser {
     /// A browser over `library`, opening at `start`, with `pictures` already decoded for it.
     pub fn new(
@@ -182,6 +202,18 @@ impl Browser {
 
     fn image(&self, path: &Path, cx: &mut Context<Self>) -> Image {
         self.images.update(cx, |images, cx| images.get(path, cx))
+    }
+
+    /// An ability's icon for a chip in the theme's colors. The icons are white, which does not
+    /// show on the light theme, so there they are black.
+    fn chip_icon(&self, ability: AbilityId, cx: &mut Context<Self>) -> Image {
+        let look = match theme::mode() {
+            theme::Mode::Dark => Look::Plain,
+            theme::Mode::Light => Look::Silhouette,
+        };
+        let path = self.library.ability_icon(ability);
+        self.images
+            .update(cx, |images, cx| images.get_as(&path, look, cx))
     }
 
     /// A lineup's aim picture, shrunk to the viewer's size.
@@ -431,14 +463,10 @@ impl Render for Browser {
             .relative()
             .flex()
             .flex_col()
-            .child(
-                parts.header.cached(
-                    StyleRefinement::default()
-                        .w_full()
-                        .h(ui::BAR_HEIGHT)
-                        .flex_none(),
-                ),
-            )
+            .child(titlebar::frame(
+                parts.header.cached(StyleRefinement::default().size_full()),
+                window,
+            ))
             .child(
                 div()
                     .flex_1()
@@ -526,16 +554,20 @@ impl Browser {
             self.images.update(cx, |images, _| images.peek(path, look))
         });
         Some(
+            // Below the header, which stays usable as the window's title bar.
             div()
                 .id("lightbox")
                 .absolute()
-                .inset_0()
+                .top(ui::BAR_HEIGHT)
+                .left_0()
+                .right_0()
+                .bottom_0()
                 .flex()
                 .items_center()
                 .justify_center()
                 .px(gpui::relative(0.05))
                 .py(gpui::relative(0.05))
-                .bg(crate::theme::alpha(gpui::black(), 0.87))
+                .bg(theme::alpha(gpui::black(), 0.87))
                 .occlude()
                 .cursor_pointer()
                 .on_mouse_down(
