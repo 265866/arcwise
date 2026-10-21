@@ -415,6 +415,11 @@ impl Browser {
                             .child(label),
                     )
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        // A drag along the clip's progress bar that strays onto a tile keeps
+                        // the clip in view, rather than swapping it for the tile's picture.
+                        if *hovered && this.player.read(cx).scrubbing() {
+                            return;
+                        }
                         this.peek_view = if *hovered {
                             Some(tile_view)
                         } else {
