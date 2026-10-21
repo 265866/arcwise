@@ -114,7 +114,7 @@ impl Updater {
     }
 
     /// Whether a newer version waits: with automatic updates off, for someone to install it from
-    /// the settings menu, and with them on, downloaded, for Arcwise to close.
+    /// the settings window, and with them on, downloaded, for Arcwise to close.
     pub fn waiting(&self) -> bool {
         match self.state {
             State::UpToDate => false,
