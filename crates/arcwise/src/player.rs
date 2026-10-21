@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use arcwise_core::LineupId;
 use arcwise_video::{Decoder, Event, Frame};
 use gpui::{
-    App, Bounds, Context, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels,
-    RenderImage, SharedString, Window, div, prelude::*, px,
+    App, Bounds, Context, DispatchPhase, FontWeight, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, RenderImage, SharedString, Window, canvas, div,
+    prelude::*, px,
 };
 
 use crate::pacing::{Pacing, Speed};
@@ -43,6 +44,15 @@ pub struct Player {
     bar: Rc<Cell<Bounds<Pixels>>>,
     /// The pointer is over the progress bar, which then thickens.
     over_bar: bool,
+    /// A drag along the progress bar, which holds the clip still until it ends.
+    scrub: Option<Scrub>,
+}
+
+struct Scrub {
+    /// Where the pointer went while a seek was still on its way, as a fraction of the clip.
+    /// Seeks go out one at a time, each once the last one's frame shows, so the frames keep up
+    /// with the pointer rather than queueing behind it.
+    next: Option<f32>,
 }
 
 impl Player {
@@ -64,6 +74,7 @@ impl Player {
             seeking: None,
             bar: Rc::default(),
             over_bar: false,
+            scrub: None,
         }
     }
 
@@ -116,6 +127,7 @@ impl Player {
         self.failed = None;
         self.opened = None;
         self.seeking = None;
+        self.scrub = None;
         self.retired.extend(self.shown.take());
     }
 
@@ -149,6 +161,49 @@ impl Player {
         cx.notify();
     }
 
+    pub fn scrubbing(&self) -> bool {
+        self.scrub.is_some()
+    }
+
+    /// Starts a drag along the progress bar at `fraction` of the way through.
+    fn scrub_start(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        // Until the clip opens there is nowhere to go, and holding it would keep it from opening.
+        if self.duration.is_none() || self.failed.is_some() {
+            return;
+        }
+        self.scrub = Some(Scrub { next: None });
+        self.update_hold();
+        self.seek(fraction, cx);
+    }
+
+    fn scrub_to(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        let Some(scrub) = &mut self.scrub else { return };
+        if self.seeking.is_some() {
+            scrub.next = Some(fraction);
+            cx.notify();
+        } else {
+            self.seek(fraction, cx);
+        }
+    }
+
+    /// Ends a drag at the last place it reached, and plays on from there unless paused.
+    fn scrub_end(&mut self, cx: &mut Context<Self>) {
+        let Some(scrub) = self.scrub.take() else {
+            return;
+        };
+        if let Some(fraction) = scrub.next {
+            self.seek(fraction, cx);
+        }
+        self.update_hold();
+        cx.notify();
+    }
+
+    /// How far along the progress bar a window position is, as a fraction of the clip.
+    fn along(&self, x: Pixels) -> Option<f32> {
+        let bar = self.bar.get();
+        (bar.size.width > px(0.)).then(|| (x - bar.left()) / bar.size.width)
+    }
+
     /// Plays the clip again from the start.
     pub fn restart(&mut self, cx: &mut Context<Self>) {
         self.paused = false;
@@ -161,6 +216,10 @@ impl Player {
     pub fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if self.hidden == visible {
             self.hidden = !visible;
+            // Out of view, the player is not drawn and so cannot hear the drag end.
+            if self.hidden {
+                self.scrub_end(cx);
+            }
             self.update_hold();
             cx.notify();
         }
@@ -168,7 +227,7 @@ impl Player {
 
     fn update_hold(&mut self) {
         let now = Instant::now();
-        if self.paused || self.hidden {
+        if self.paused || self.hidden || self.scrub.is_some() {
             self.pacing.hold(now);
         } else {
             self.pacing.release(now);
@@ -211,6 +270,7 @@ impl Player {
                     error,
                     codec_missing,
                 } if (self.opened_as..=self.generation).contains(&generation) => {
+                    self.scrub = None;
                     self.failed = Some(if codec_missing {
                         "Windows has no decoder for this clip. AV1 clips need the AV1 Video \
                          Extension from the Microsoft Store."
@@ -241,7 +301,9 @@ impl Player {
     /// Runs once a frame while a clip plays, and redraws only when a new frame is due. A redraw
     /// every frame would cost more and show nothing new.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.clip.is_none() || self.failed.is_some() || self.pacing.is_held() {
+        // Hidden, it is not drawn, so a frame it is waiting to show would ask for a redraw
+        // every frame until it is back in view.
+        if self.clip.is_none() || self.failed.is_some() || self.pacing.is_held() || self.hidden {
             self.ticking = false;
             return;
         }
@@ -256,6 +318,12 @@ impl Player {
     }
 
     fn progress(&self, now: Instant) -> f32 {
+        if let Some(Scrub {
+            next: Some(fraction),
+        }) = self.scrub
+        {
+            return fraction.clamp(0., 1.);
+        }
         match (self.pacing.media_now(now).or(self.seeking), self.duration) {
             (Some(media), Some(duration)) if !duration.is_zero() => {
                 (media.as_secs_f64() % duration.as_secs_f64() / duration.as_secs_f64()) as f32
@@ -263,6 +331,42 @@ impl Player {
             _ => 0.,
         }
     }
+}
+
+/// Follows a drag along the progress bar wherever the pointer goes, off the bar or out of the
+/// window, which Windows still reports while the button is held, until the button is let go.
+/// Always listening, not only once a drag has drawn, so a release right after the press is not
+/// missed.
+fn follow_drag(player: gpui::WeakEntity<Player>) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, window, _| {
+            let moved = player.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                if phase != DispatchPhase::Capture {
+                    return;
+                }
+                moved
+                    .update(cx, |player, cx| {
+                        // A release the window missed, as when another window took the pointer.
+                        if event.pressed_button != Some(MouseButton::Left) {
+                            player.scrub_end(cx);
+                        } else if let Some(along) = player.along(event.position.x) {
+                            player.scrub_to(along, cx);
+                        }
+                    })
+                    .ok();
+            });
+            let released = player.clone();
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                    released.update(cx, |player, cx| player.scrub_end(cx)).ok();
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_0()
 }
 
 fn image(frame: Frame) -> Option<Arc<RenderImage>> {
@@ -280,6 +384,9 @@ impl Render for Player {
             if let Some(image) = self.pacing.advance(now, pull).and_then(image) {
                 self.seeking = None;
                 self.retired.extend(self.shown.replace(image));
+                if let Some(fraction) = self.scrub.as_mut().and_then(|scrub| scrub.next.take()) {
+                    self.seek(fraction, cx);
+                }
                 if let (Some(opened), Some(clip)) = (self.opened.take(), self.clip) {
                     crate::trace::task(|| format!("clip {clip}"), opened);
                 }
@@ -374,10 +481,15 @@ impl Render for Player {
                     .flex()
                     .items_end()
                     .child(ui::measure(self.bar.clone()))
+                    .child(follow_drag(cx.entity().downgrade()))
                     .child(
                         div()
                             .w_full()
-                            .h(px(if self.over_bar { 6. } else { 3. }))
+                            .h(px(if self.over_bar || self.scrub.is_some() {
+                                6.
+                            } else {
+                                3.
+                            }))
                             .bg(theme::alpha(gpui::white(), 0.12))
                             .child(
                                 div()
@@ -395,10 +507,8 @@ impl Render for Player {
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
                             // The clip around it pauses when clicked.
                             cx.stop_propagation();
-                            let bar = this.bar.get();
-                            if bar.size.width > px(0.) {
-                                let along = (event.position.x - bar.left()) / bar.size.width;
-                                this.seek(along, cx);
+                            if let Some(along) = this.along(event.position.x) {
+                                this.scrub_start(along, cx);
                             }
                         }),
                     ),
