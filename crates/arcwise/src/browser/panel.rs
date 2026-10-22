@@ -3,10 +3,10 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use arcwise_core::{Landing, Lineup, Tag, View};
+use arcwise_core::{Bolt, Charge, Landing, Lineup, Tag, View};
 use gpui::{
     AnyElement, Bounds, Context, Div, FontWeight, Hsla, IntoElement, Pixels, RenderImage,
-    SharedString, canvas, div, point, prelude::*, px, size,
+    SharedString, canvas, div, point, prelude::*, px, rgb, size, svg,
 };
 
 use super::Browser;
@@ -66,6 +66,7 @@ impl Browser {
                         .children(landing.and_then(|g| self.throw_from(g, color, cx)))
                         .child(self.viewer(lineup, color, cx))
                         .child(self.step_tiles(lineup, color, cx))
+                        .children(bow(lineup))
                         .children(technique(lineup, color))
                         .child(keys(cx.global::<Shortcuts>())),
                 )
@@ -550,6 +551,123 @@ fn technique(lineup: &Lineup, color: Hsla) -> Option<Div> {
                     .child(div().flex_1().min_w_0().child(line))
             })),
     )
+}
+
+/// The bow's HUD for each of Sova's bolts, drawn as the game draws it: the charge bar filled into
+/// the section to release in, red when full, and a lit diamond for each bounce.
+fn bow(lineup: &Lineup) -> Option<Div> {
+    let bolts = &lineup.bolts;
+    if bolts.is_empty() {
+        return None;
+    }
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .px(px(14.))
+            .py(px(12.))
+            .rounded(px(10.))
+            .bg(theme::raised())
+            .children(bolts.iter().enumerate().map(|(i, bolt)| {
+                let name = match (bolts.len(), i) {
+                    (1, _) => "Bow",
+                    (_, 0) => "1st bolt",
+                    _ => "2nd bolt",
+                };
+                let hud = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .child(
+                        div()
+                            .w(px(64.))
+                            .flex_none()
+                            .font_weight(FontWeight::BOLD)
+                            .child(name),
+                    )
+                    .child(bow_hud(bolt))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(theme::muted())
+                            .child(format!(
+                                "{}, {}",
+                                bolt.charge.label(),
+                                bolt.bounces.label().to_lowercase()
+                            )),
+                    );
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(hud)
+                    .children(bolt.aim.as_ref().map(|aim| {
+                        div()
+                            .pl(px(78.))
+                            .line_height(px(20.))
+                            .child(format!("Aim: {aim}"))
+                    }))
+            })),
+    )
+}
+
+/// The game's own fill colors, so the bar reads like the one on screen.
+const CHARGE_FILL: u32 = 0x4bcaa9;
+const CHARGE_FULL: u32 = 0xf02d2d;
+const DIAMOND: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M6 .5 11.5 6 6 11.5.5 6Z"/></svg>"#;
+const DIAMOND_OUTLINE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M6 1.2 10.8 6 6 10.8 1.2 6Z" fill="none" stroke="#000" stroke-width="1.4"/></svg>"##;
+
+/// One bolt's bar and bounce diamonds.
+fn bow_hud(bolt: &Bolt) -> Div {
+    let full = bolt.charge == Charge::Full;
+    let reached = bolt.charge.sections();
+    // The released section shows part filled, as the fill was when the bolt left.
+    let section = |i: u8| {
+        let fill = if full || i < reached {
+            1.
+        } else if i == reached {
+            0.45
+        } else {
+            0.
+        };
+        div().flex_1().h_full().bg(theme::raised()).child(
+            div().h_full().w(gpui::relative(fill)).bg(rgb(if full {
+                CHARGE_FULL
+            } else {
+                CHARGE_FILL
+            })),
+        )
+    };
+    div()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(6.))
+        .child(
+            div()
+                .w(px(156.))
+                .h(px(12.))
+                .flex()
+                .gap(px(2.))
+                .p(px(1.))
+                .border_1()
+                .border_color(theme::muted())
+                .bg(theme::muted())
+                .children((0..3).map(section)),
+        )
+        .child(div().flex().gap(px(6.)).children((0..2).map(|i| {
+            svg()
+                .data(if i < bolt.bounces.count() {
+                    DIAMOND
+                } else {
+                    DIAMOND_OUTLINE
+                })
+                .size(px(12.))
+                .text_color(theme::text())
+        })))
 }
 
 fn section_label(text: &'static str) -> Div {

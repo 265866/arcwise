@@ -214,6 +214,94 @@ impl Steps {
     }
 }
 
+/// How far Sova's bow is drawn when a bolt leaves: the section of the three-section charge bar the
+/// fill has reached, or a full bar, which turns red. Written 0 to 3.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "u8")]
+pub enum Charge {
+    /// Released while the fill is in the first section.
+    None,
+    One,
+    Two,
+    Full,
+}
+
+impl TryFrom<u8> for Charge {
+    type Error = String;
+
+    fn try_from(n: u8) -> Result<Self, Self::Error> {
+        match n {
+            0 => Ok(Charge::None),
+            1 => Ok(Charge::One),
+            2 => Ok(Charge::Two),
+            3 => Ok(Charge::Full),
+            _ => Err(format!("a charge is 0 to 3, not {n}")),
+        }
+    }
+}
+
+impl Charge {
+    /// The sections the fill has passed: 0 to 3.
+    pub fn sections(self) -> u8 {
+        match self {
+            Charge::None => 0,
+            Charge::One => 1,
+            Charge::Two => 2,
+            Charge::Full => 3,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Charge::None => "No charge",
+            Charge::One => "1 charge",
+            Charge::Two => "2 charge",
+            Charge::Full => "Full charge",
+        }
+    }
+}
+
+/// How many times a bolt bounces before it lands, chosen with right click: 0 to 2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "u8")]
+pub struct Bounces(u8);
+
+impl TryFrom<u8> for Bounces {
+    type Error = String;
+
+    fn try_from(n: u8) -> Result<Self, Self::Error> {
+        if n <= 2 {
+            Ok(Bounces(n))
+        } else {
+            Err(format!("a bolt bounces 0 to 2 times, not {n}"))
+        }
+    }
+}
+
+impl Bounces {
+    pub fn count(self) -> u8 {
+        self.0
+    }
+
+    pub fn label(self) -> &'static str {
+        match self.0 {
+            0 => "No bounce",
+            1 => "1 bounce",
+            _ => "2 bounces",
+        }
+    }
+}
+
+/// One of Sova's bolts, as his bow's HUD shows it when it leaves.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct Bolt {
+    pub charge: Charge,
+    pub bounces: Bounces,
+    /// What the crosshair lines up with for this bolt, when the bolts of a lineup aim apart.
+    #[serde(default)]
+    pub aim: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Lineup {
     pub id: LineupId,
@@ -230,4 +318,8 @@ pub struct Lineup {
     pub path: Vec<Point>,
     pub land: Spot,
     pub steps: Option<Steps>,
+    /// Sova's bolts, in the order they are fired: one, or two for Double Shock Bolt. Empty for
+    /// other abilities.
+    #[serde(default)]
+    pub bolts: Vec<Bolt>,
 }

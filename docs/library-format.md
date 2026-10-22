@@ -55,11 +55,15 @@ A missing image shows a placeholder, and a missing clip shows its first frame wi
       "path": [[35.1, 60.0], [50.2, 50.4]],
       "land": { "x": 50.2, "y": 50.4, "callout": "A Main" },
       "steps": {
-        "setup": ["Charge 2 bars, 1 bounce"],
-        "aim": "Top of the antenna",
-        "release": "Left click",
+        "setup": [],
+        "aim": null,
+        "release": "Fire the first bolt at 1 charge with no bounce, then the second at full charge with 1 bounce",
         "note": null
-      }
+      },
+      "bolts": [
+        { "charge": 1, "bounces": 0, "aim": "Top of the antenna" },
+        { "charge": 3, "bounces": 1, "aim": "Left edge of the chimney" }
+      ]
     }
   ]
 }
@@ -75,6 +79,7 @@ A missing image shows a placeholder, and a missing clip shows its first frame wi
 | `path` | The throw's arc from the stand spot, drawn on the map. May be empty. |
 | `callout` | The place name, or `null` when it has none. |
 | `steps` | How to throw, or `null`. `note` is shown over the clip when the throw needs more than a plain click, such as a jump. |
+| `bolts` | Optional, for Sova's bolts: one, or two for Double Shock Bolt, in the order fired. `charge` is the section of the bow's charge bar the fill reached when the bolt left: `0` for the first (no charge), `1`, `2`, or `3` for a full bar. `bounces` is `0` to `2`. `aim`, optional, says what the crosshair lines up with for that bolt, when the two bolts of a Double Shock Bolt aim apart. The panel draws each bolt as the bow's HUD. |
 
 Arcwise refuses a library whose lineups refer to a map, agent or ability it does not list, or that
 lists a lineup id twice.

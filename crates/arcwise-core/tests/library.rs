@@ -1,4 +1,6 @@
-use arcwise_core::{AbilityId, AgentId, Library, LineupId, LoadError, MapId, Role, Side, Tag};
+use arcwise_core::{
+    AbilityId, AgentId, Bounces, Charge, Library, LineupId, LoadError, MapId, Role, Side, Tag,
+};
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/library.json");
 
@@ -69,6 +71,40 @@ fn media_paths_follow_the_layout() {
         library.map_image(&MapId::new("m-bind"), Side::Defense),
         std::path::Path::new("lib/maps/m-bind-defense.svg")
     );
+}
+
+#[test]
+fn reads_each_bolts_charge_and_bounces() {
+    let library = fixture();
+    let bolts = &library.lineup(LineupId(2)).unwrap().bolts;
+    let read: Vec<_> = bolts
+        .iter()
+        .map(|b| (b.charge, b.bounces.count()))
+        .collect();
+    assert_eq!(read, [(Charge::Two, 1), (Charge::Full, 0)]);
+    assert_eq!(bolts[1].charge.label(), "Full charge");
+    assert_eq!(bolts[0].bounces.label(), "1 bounce");
+    assert_eq!(bolts[0].aim, None);
+    assert_eq!(bolts[1].aim.as_deref(), Some("Top of the antenna"));
+    assert!(
+        library.lineup(LineupId(3)).unwrap().bolts.is_empty(),
+        "a lineup without bolts has none"
+    );
+}
+
+#[test]
+fn rejects_a_charge_or_bounce_count_out_of_range() {
+    for (from, to) in [
+        (r#""charge": 3"#, r#""charge": 4"#),
+        (r#""bounces": 1 }"#, r#""bounces": 3 }"#),
+    ] {
+        let err = Library::from_json("lib", &replace(from, to)).unwrap_err();
+        assert!(
+            matches!(err, LoadError::Parse { .. }),
+            "{from} -> {to}: {err}"
+        );
+    }
+    assert!(Bounces::try_from(2).is_ok());
 }
 
 fn replace(from: &str, to: &str) -> Vec<u8> {
