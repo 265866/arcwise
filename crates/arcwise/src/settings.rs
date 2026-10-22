@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use arcwise_core::{AgentId, MapId, Side};
 use semver::Version;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::pacing::Speed;
 use crate::placement::Placement;
 use crate::theme;
 
@@ -25,8 +27,16 @@ pub struct Settings {
     pub blur_strength: u8,
     /// Whether Arcwise updates itself; see [`crate::updater`].
     pub auto_update: bool,
-    /// The dark or light theme; see [`theme::mode`].
+    /// The dark or light theme; see [`theme::mode`]. While the theme follows Windows', the one it
+    /// showed last.
     pub theme: theme::Mode,
+    /// Whether the theme follows Windows' light or dark mode, the settings' System choice.
+    pub follow_system_theme: bool,
+    /// Whether Arcwise opens on the map, agent and side shown last.
+    pub reopen_last: bool,
+    /// The speed clips play at when Arcwise opens.
+    #[serde(deserialize_with = "or_default")]
+    pub start_speed: Speed,
     /// Whether the header stands in for Windows' title bar; see [`crate::titlebar`].
     pub custom_title_bar: bool,
     /// Where the window was when it last moved, to open there again.
@@ -47,6 +57,9 @@ impl Default for Settings {
             blur_strength: theme::DEFAULT_STRENGTH,
             auto_update: true,
             theme: theme::Mode::Dark,
+            follow_system_theme: false,
+            reopen_last: true,
+            start_speed: Speed::Full,
             custom_title_bar: true,
             window: None,
             version: None,
@@ -67,6 +80,15 @@ pub struct Last {
     pub map: MapId,
     pub agent: AgentId,
     pub side: Side,
+}
+
+/// Reads a value, or takes its default when it is one this version does not know, such as a
+/// newer version's, rather than failing the whole file.
+fn or_default<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).unwrap_or_default())
 }
 
 /// Reads the blur strength. Arcwise 0.2 and earlier saved it from 0 to 1, as a decimal such as
@@ -132,6 +154,23 @@ impl Settings {
         self.write_over(&path, |saved| saved.version = self.version.clone())
     }
 
+    /// Saves only the theme shown, the same way, as when it followed Windows' without anyone
+    /// changing a setting.
+    pub fn save_theme(&self) -> anyhow::Result<()> {
+        let path = Self::path().context("APPDATA is not set")?;
+        self.write_theme(&path)
+    }
+
+    /// Only while the file still follows Windows' theme: another Arcwise may have had a theme
+    /// chosen since, which this must not undo.
+    fn write_theme(&self, path: &Path) -> anyhow::Result<()> {
+        self.write_over(path, |saved| {
+            if saved.follow_system_theme {
+                saved.theme = self.theme;
+            }
+        })
+    }
+
     /// Changes the settings in the file with `change`, or these if there is no file yet. A file
     /// that does not parse, as after a mistaken hand edit, is left for its owner to fix.
     fn write_over(&self, path: &Path, change: impl FnOnce(&mut Settings)) -> anyhow::Result<()> {
@@ -176,6 +215,9 @@ mod tests {
             blur_strength: 30,
             auto_update: false,
             theme: theme::Mode::Light,
+            follow_system_theme: true,
+            reopen_last: false,
+            start_speed: Speed::Quarter,
             custom_title_bar: false,
             window: Some(Placement {
                 x: -1200.,
@@ -271,6 +313,44 @@ mod tests {
     }
 
     #[test]
+    fn a_speed_it_does_not_know_keeps_the_rest() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"start_speed": "eighth", "blur": false}"#).unwrap();
+        assert_eq!(settings.start_speed, Speed::Full);
+        assert!(!settings.blur, "the rest of the file still counts");
+    }
+
+    #[test]
+    fn following_windows_does_not_undo_a_theme_chosen_in_another_arcwise() {
+        let dir = std::env::temp_dir().join(format!("arcwise-theme-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let following = Settings {
+            theme: theme::Mode::Light,
+            follow_system_theme: true,
+            ..Settings::default()
+        };
+        // The other Arcwise chose Dark, which stops following Windows.
+        Settings {
+            theme: theme::Mode::Dark,
+            ..Settings::default()
+        }
+        .write(&path)
+        .unwrap();
+        following.write_theme(&path).unwrap();
+        assert_eq!(Settings::read(&path).unwrap().theme, theme::Mode::Dark);
+        // While the file still follows Windows, the theme taken from it is saved.
+        following.write(&path).unwrap();
+        let dark = Settings {
+            theme: theme::Mode::Dark,
+            ..following.clone()
+        };
+        dark.write_theme(&path).unwrap();
+        let read = Settings::read(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(read.theme, theme::Mode::Dark);
+    }
+
+    #[test]
     fn missing_fields_take_defaults() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
@@ -278,6 +358,12 @@ mod tests {
         assert_eq!(settings.blur_strength, theme::DEFAULT_STRENGTH);
         assert!(settings.auto_update, "updates are on until turned off");
         assert_eq!(settings.theme, theme::Mode::Dark, "dark until changed");
+        assert!(!settings.follow_system_theme);
+        assert!(
+            settings.reopen_last,
+            "opens where it was left until turned off"
+        );
+        assert_eq!(settings.start_speed, Speed::Full);
         assert!(
             settings.custom_title_bar,
             "the header is the title bar until changed"

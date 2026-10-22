@@ -52,6 +52,19 @@ fn main() {
     theme::set_blur(settings.blur);
     theme::set_strength(settings.blur_strength);
     theme::set_mode(settings.theme);
+    theme::set_follow_system(settings.follow_system_theme);
+    // Windows' theme now, before the library's first pictures are decoded for one, in case it
+    // changed while Arcwise was closed. The window checks again as it opens.
+    #[cfg(windows)]
+    if settings.follow_system_theme
+        && let Some(light) = win::apps_use_light_theme()
+    {
+        theme::set_mode(if light {
+            theme::Mode::Light
+        } else {
+            theme::Mode::Dark
+        });
+    }
     titlebar::init(settings.custom_title_bar);
     let preload = app::preload(&args, &settings);
     gpui_platform::application().run(move |cx: &mut App| {
@@ -77,9 +90,15 @@ fn main() {
                 ..WindowOptions::default()
             },
             |window, cx| {
+                theme::sync_system(window);
                 titlebar::sync_native(window);
                 cx.new(|cx| {
-                    cx.observe_window_appearance(window, |_, window, _| {
+                    cx.observe_window_appearance(window, |this: &mut Arcwise, window, _| {
+                        if theme::sync_system(window) {
+                            // Every view draws again, cached ones too, in the new colors.
+                            window.refresh();
+                            this.theme_followed();
+                        }
                         titlebar::sync_native(window);
                     })
                     .detach();

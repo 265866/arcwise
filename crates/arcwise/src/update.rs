@@ -19,6 +19,8 @@ use sigstore_verify::{VerificationPolicy, Verifier};
 
 /// The page people can download releases from themselves.
 pub const RELEASES_PAGE: &str = "https://github.com/265866/arcwise/releases/latest";
+/// Every release, with what each changed.
+pub const RELEASES: &str = "https://github.com/265866/arcwise/releases";
 const LATEST_RELEASE: &str = "https://api.github.com/repos/265866/arcwise/releases/latest";
 /// Where GitHub serves a release's files, by tag and file name.
 const DOWNLOADS: &str = "https://github.com/265866/arcwise/releases/download";

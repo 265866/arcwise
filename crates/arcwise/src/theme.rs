@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use arcwise_core::Rgb;
-use gpui::{Hsla, Rgba, WindowBackgroundAppearance, rgb};
+use gpui::{Hsla, Rgba, Window, WindowAppearance, WindowBackgroundAppearance, rgb};
 use serde::{Deserialize, Serialize};
 
 /// Whether the window shows what is behind it, blurred, through its background.
@@ -12,6 +12,8 @@ static BLUR: AtomicBool = AtomicBool::new(false);
 static STRENGTH: AtomicU8 = AtomicU8::new(DEFAULT_STRENGTH);
 /// Whether the light theme is on, rather than the dark one.
 static LIGHT: AtomicBool = AtomicBool::new(false);
+/// Whether the theme follows Windows' light or dark mode.
+static FOLLOW: AtomicBool = AtomicBool::new(false);
 
 /// The strength that gives the window's look before strength could be chosen.
 pub const DEFAULT_STRENGTH: u8 = 55;
@@ -99,6 +101,29 @@ pub fn mode() -> Mode {
     } else {
         Mode::Dark
     }
+}
+
+pub fn set_follow_system(on: bool) {
+    FOLLOW.store(on, Ordering::Relaxed);
+}
+
+pub fn follows_system() -> bool {
+    FOLLOW.load(Ordering::Relaxed)
+}
+
+/// Takes Windows' light or dark mode, as the window sees it, while the theme follows it. Returns
+/// whether the theme changed.
+pub fn sync_system(window: &Window) -> bool {
+    if !follows_system() {
+        return false;
+    }
+    let system = match window.appearance() {
+        WindowAppearance::Light | WindowAppearance::VibrantLight => Mode::Light,
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => Mode::Dark,
+    };
+    let changed = system != mode();
+    set_mode(system);
+    changed
 }
 
 fn palette() -> &'static Palette {

@@ -1,5 +1,5 @@
 //! The command line: `arcwise [--library DIR] [--map NAME] [--agent NAME] [--side attack|defense]
-//! [--lineup ID] [--view clip|stand|aim|lands]`.
+//! [--lineup ID] [--view clip|stand|aim|lands] [--resume]`.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -14,6 +14,9 @@ pub struct Args {
     pub side: Option<Side>,
     pub lineup: Option<LineupId>,
     pub view: Option<View>,
+    /// Open where Arcwise was, even with opening where it was left turned off: Arcwise passes it
+    /// to itself when it reopens to apply a setting or an update.
+    pub resume: bool,
 }
 
 impl Args {
@@ -25,6 +28,7 @@ impl Args {
             let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
             match flag.as_str() {
                 "--library" => parsed.library = Some(value()?.into()),
+                "--resume" => parsed.resume = true,
                 "--map" => parsed.map = Some(text(value()?)),
                 "--agent" => parsed.agent = Some(text(value()?)),
                 "--side" => {
@@ -88,6 +92,7 @@ mod tests {
             "211",
             "--view",
             "aim",
+            "--resume",
         ])
         .unwrap();
         assert_eq!(
@@ -99,6 +104,7 @@ mod tests {
                 side: Some(Side::Defense),
                 lineup: Some(LineupId(211)),
                 view: Some(View::Aim),
+                resume: true,
             }
         );
     }

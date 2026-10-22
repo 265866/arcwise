@@ -3,7 +3,10 @@
 
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Speed {
     #[default]
     Full,
@@ -27,6 +30,8 @@ impl Speed {
             Speed::Quarter => "¼×",
         }
     }
+
+    pub const ALL: [Speed; 3] = [Speed::Full, Speed::Half, Speed::Quarter];
 
     /// The next slower speed, back to full after the slowest.
     pub fn next(self) -> Speed {
