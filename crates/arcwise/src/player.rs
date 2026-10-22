@@ -16,6 +16,7 @@ use gpui::{
 };
 
 use crate::pacing::{Pacing, Speed};
+use crate::remote;
 use crate::{theme, ui};
 
 pub struct Player {
@@ -78,19 +79,22 @@ impl Player {
         }
     }
 
-    /// Plays a lineup's clip from the start, unless it is the one already playing.
+    /// Plays a lineup's clip from the start, unless it is the one already playing. A clip of a
+    /// library on the web not on disk yet streams from the web.
     /// Frames are scaled down to `max_height` rows, the most the viewer can show.
     pub fn play(&mut self, id: LineupId, path: PathBuf, max_height: u32, cx: &mut Context<Self>) {
         if self.clip == Some(id) {
             return;
         }
+        let path = remote::playable(&path);
+        let streams = remote::is_url(&path.to_string_lossy());
         self.reset();
         self.opened_as = self.generation;
         self.clip = Some(id);
         self.opened = Some(Instant::now());
         match &self.decoder {
             Err(e) => self.failed = Some(e.clone()),
-            Ok(_) if !path.is_file() => {
+            Ok(_) if !streams && !path.is_file() => {
                 self.failed = Some("This clip is missing from the library.".into());
             }
             Ok(decoder) => decoder.open(self.generation, path, Some(max_height)),
@@ -102,7 +106,7 @@ impl Player {
     /// Readies a clip that may play next, so it shows at once if it does.
     pub fn prepare(&self, path: PathBuf, max_height: u32) {
         if let Ok(decoder) = &self.decoder {
-            decoder.prepare(path, Some(max_height));
+            decoder.prepare(remote::playable(&path), Some(max_height));
         }
     }
 

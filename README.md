@@ -78,10 +78,22 @@ Alt and Shift, and each command can have two. Esc and the number keys stay as th
 
 ## Lineups
 
-Arcwise does not come with lineups or download any. It reads a library folder on your computer;
-[docs/library-format.md](docs/library-format.md) describes the layout. On first run it asks for
-the folder. To open another one, open the settings with the gear at the top right, or
-<kbd>Ctrl</kbd> <kbd>,</kbd>, and click **Change…** under **General**.
+Arcwise shows the lineups of https://library.arcwise.fish, streaming each clip and picture when
+it is first shown and keeping it for next time. The settings' **General** tab (the gear at the
+top right, or <kbd>Ctrl</kbd> <kbd>,</kbd>) lists the libraries it shows:
+
+- Tick or untick a library to show or hide its lineups. Lineups from every library ticked show
+  together.
+- **Folder…** adds a library folder on your computer. To add a library on the web, copy its
+  address and click **Paste address**.
+- **Offline…** keeps a library's maps on your computer, chosen one by one or all of them, so their
+  lineups play without a connection. When the library changes, Arcwise fetches only what changed.
+  Unticking a map deletes its clips to free the room.
+
+Without a connection, Arcwise shows a library on the web as it was last fetched. The
+[arcwise-library](https://github.com/265866/arcwise-library) repository describes the library
+format and publishes a library to the web; [docs/library-format.md](docs/library-format.md) says
+what Arcwise does with one.
 
 ## Appearance
 

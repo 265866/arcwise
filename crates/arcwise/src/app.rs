@@ -1,11 +1,10 @@
 //! The window's root: finds and loads the library, then shows it.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use arcwise_core::{Library, LoadError, Start};
+use arcwise_core::{Library, Start};
 use gpui::{
     Animation, AnimationExt, AsyncApp, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable,
     FontWeight, IntoElement, MouseDownEvent, MouseUpEvent, PathPromptOptions, SharedString,
@@ -14,12 +13,15 @@ use gpui::{
 
 use crate::args::Args;
 use crate::browser::{
-    self, Browser, ChangeLibrary, Chosen, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength,
-    SetCustomTitleBar, SetReopenLast, SetShortcuts, SetStartSpeed, SetTheme,
+    self, AddLibraryFolder, Browser, Chosen, Libraries, Relaunch, SetAutoUpdate, SetBlur,
+    SetBlurStrength, SetCustomTitleBar, SetLibraries, SetReopenLast, SetShortcuts, SetStartSpeed,
+    SetTheme,
 };
+use crate::downloads::Downloads;
 use crate::images::{self, Picture};
 use crate::placement::Placement;
-use crate::settings::{Last, Settings};
+use crate::settings::{Last, LibrarySource, Settings};
+use crate::sources::{self, State as SourceState, Status};
 use crate::updater::{State, TOAST_LIFETIME, Toast, Updater};
 use crate::{theme, titlebar, trace, ui, update};
 
@@ -28,7 +30,7 @@ enum Screen {
     Welcome {
         problem: Option<SharedString>,
     },
-    Loading(PathBuf),
+    Loading,
     Browsing(Entity<Browser>),
 }
 
@@ -41,6 +43,11 @@ pub struct Arcwise {
     notice: Option<SharedString>,
     /// Library loads started, to tell the latest from older ones still running.
     loads: u64,
+    /// How each library in the list fared when they were last read.
+    statuses: Vec<Status>,
+    downloads: Entity<Downloads>,
+    /// The settings tab to show again once the libraries changed there have been read.
+    reopen: Option<browser::Tab>,
     updater: Entity<Updater>,
     /// Saves where the window is once it has stayed still for [`SAVE_AFTER_MOVE`].
     save_window: Option<Task<()>>,
@@ -62,6 +69,9 @@ impl Arcwise {
             start: None,
             notice: None,
             loads: 0,
+            statuses: Vec::new(),
+            downloads: cx.new(|_| Downloads::default()),
+            reopen: None,
             updater,
             save_window: None,
         };
@@ -74,15 +84,10 @@ impl Arcwise {
                 }
             }
             Ok(args) => {
-                let library = args
-                    .library
-                    .clone()
-                    .or_else(|| this.settings.library.clone());
                 this.start = Some(args);
-                match (library, preload) {
-                    (Some(path), Some(preload)) => this.take_preload(&path, preload, cx),
-                    (Some(path), None) => this.load(path, cx),
-                    (None, _) => {}
+                match preload {
+                    Some(preload) => this.take_preload(preload, cx),
+                    None => this.load(cx),
                 }
             }
         }
@@ -91,20 +96,19 @@ impl Arcwise {
 
     /// Takes the library read since launch: at once when it is ready, as it usually is by the
     /// time the window opens, so the first frame shows it.
-    fn take_preload(&mut self, path: &Path, preload: Receiver<Opened>, cx: &mut Context<Self>) {
-        let load = self.begin_load(path, cx);
+    fn take_preload(&mut self, preload: Receiver<Opened>, cx: &mut Context<Self>) {
+        let load = self.begin_load(cx);
         match preload.recv_timeout(PRELOAD_WAIT) {
             Ok(opened) => self.opened(load, opened, cx),
             // The thread reading it is gone without an answer; read it here instead.
-            Err(RecvTimeoutError::Disconnected) => self.load(path.to_owned(), cx),
+            Err(RecvTimeoutError::Disconnected) => self.load(cx),
             Err(RecvTimeoutError::Timeout) => {
-                let path = path.to_owned();
                 let task = cx.background_spawn(async move { preload.recv().ok() });
                 cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                     let opened = task.await;
                     this.update(cx, |this, cx| match opened {
                         Some(opened) => this.opened(load, opened, cx),
-                        None if this.loads == load => this.load(path, cx),
+                        None if this.loads == load => this.load(cx),
                         None => {}
                     })
                     .ok();
@@ -114,11 +118,11 @@ impl Arcwise {
         }
     }
 
-    /// Loads the library at `path`. A library already open stays on screen until the new one has
-    /// loaded, and stays if it fails.
-    fn load(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let load = self.begin_load(&path, cx);
-        let request = Request::new(path, self.start.clone().unwrap_or_default(), &self.settings);
+    /// Reads the libraries in the list. The lineups already open stay on screen until the new ones
+    /// have loaded, and stay if none can be.
+    fn load(&mut self, cx: &mut Context<Self>) {
+        let load = self.begin_load(cx);
+        let request = Request::new(self.start.clone().unwrap_or_default(), &self.settings);
         let task = cx.background_spawn(async move { request.open() });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let opened = task.await;
@@ -130,10 +134,10 @@ impl Arcwise {
 
     /// Starts a load, and returns its number. Only the latest load counts; one overtaken by
     /// another is dropped when it finishes.
-    fn begin_load(&mut self, path: &Path, cx: &mut Context<Self>) -> u64 {
+    fn begin_load(&mut self, cx: &mut Context<Self>) -> u64 {
         self.loads += 1;
         if !matches!(self.screen, Screen::Browsing(_)) {
-            self.screen = Screen::Loading(path.to_owned());
+            self.screen = Screen::Loading;
         }
         self.notice = None;
         cx.notify();
@@ -145,16 +149,24 @@ impl Arcwise {
         if self.loads != load {
             return;
         }
-        let Opened { path, result } = opened;
+        let Opened { statuses, result } = opened;
+        self.statuses = statuses;
+        self.keep_offline(cx);
         match result {
             Ok((library, start, pictures)) => {
-                let same_library = self.settings.library.as_ref() == Some(&path);
                 self.start = None;
                 let library = Arc::new(library);
                 let updater = self.updater.clone();
                 let settings = &self.settings;
-                let browser =
-                    cx.new(|cx| Browser::new(library, start, pictures, updater, settings, cx));
+                let libraries = Libraries {
+                    list: settings.libraries(),
+                    statuses: self.statuses.clone(),
+                    downloads: self.downloads.clone(),
+                    reopen: self.reopen.take(),
+                };
+                let browser = cx.new(|cx| {
+                    Browser::new(library, start, pictures, updater, libraries, settings, cx)
+                });
                 cx.subscribe(&browser, |this, _, chosen: &Chosen, _| {
                     this.settings.last = Some(Last {
                         map: chosen.map.clone(),
@@ -164,8 +176,21 @@ impl Arcwise {
                     this.save_settings();
                 })
                 .detach();
-                cx.subscribe(&browser, |this, _, _: &ChangeLibrary, cx| {
+                cx.subscribe(&browser, |this, _, _: &AddLibraryFolder, cx| {
                     this.pick_folder(cx);
+                })
+                .detach();
+                cx.subscribe(&browser, |this, _, changed: &SetLibraries, cx| {
+                    this.settings.libraries = Some(changed.list.clone());
+                    this.save_settings();
+                    if changed.reload {
+                        this.reopen = Some(browser::Tab::General);
+                        this.start = Some(Args {
+                            resume: true,
+                            ..Args::default()
+                        });
+                        this.load(cx);
+                    }
                 })
                 .detach();
                 cx.subscribe(&browser, |this, _, &SetBlur(on): &SetBlur, _| {
@@ -233,14 +258,9 @@ impl Arcwise {
                     old.update(cx, |old, cx| old.release_all(cx));
                 }
                 self.screen = Screen::Browsing(browser);
-                if !same_library {
-                    self.settings.library = Some(path);
-                    self.settings.last = None;
-                    self.save_settings();
-                }
             }
-            Err(e) => {
-                let problem = format!("{:#}", anyhow::Error::from(e)).into();
+            Err(problem) => {
+                let problem: SharedString = problem.into();
                 if matches!(self.screen, Screen::Browsing(_)) {
                     self.notice = Some(problem);
                 } else {
@@ -324,7 +344,7 @@ impl Arcwise {
             Toast::Available(version) => {
                 let browser = match &self.screen {
                     Screen::Browsing(browser) => Some(browser.clone()),
-                    Screen::Welcome { .. } | Screen::Loading(_) => None,
+                    Screen::Welcome { .. } | Screen::Loading => None,
                 };
                 let toast = row(
                     toast,
@@ -397,9 +417,9 @@ impl Arcwise {
     fn traced(&self, root: Div, start: Instant) -> Div {
         let browser = match &self.screen {
             Screen::Browsing(browser) => Some(browser.downgrade()),
-            Screen::Welcome { .. } | Screen::Loading(_) => None,
+            Screen::Welcome { .. } | Screen::Loading => None,
         };
-        let loading = matches!(self.screen, Screen::Loading(_));
+        let loading = matches!(self.screen, Screen::Loading);
         root.child(
             canvas(
                 |_, _, _| {},
@@ -493,7 +513,7 @@ impl Arcwise {
         self.pick_folder(cx);
     }
 
-    /// Asks for a library folder and loads it.
+    /// Asks for a library folder, adds it to the list, and reads the libraries again.
     fn pick_folder(&mut self, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -505,10 +525,47 @@ impl Arcwise {
             if let Ok(Ok(Some(mut paths))) = picked.await
                 && let Some(path) = paths.pop()
             {
-                this.update(cx, |this, cx| this.load(path, cx)).ok();
+                this.update(cx, |this, cx| {
+                    this.add_library(path.to_string_lossy().into_owned(), cx);
+                })
+                .ok();
             }
         })
         .detach();
+    }
+
+    /// Fetches what changed in the maps each library on the web keeps offline, and works out how
+    /// much of each is on disk for the settings.
+    fn keep_offline(&mut self, cx: &mut Context<Self>) {
+        for library in self.settings.libraries() {
+            let loaded = self.statuses.iter().any(|s| {
+                s.location == library.location && matches!(s.state, SourceState::Loaded { .. })
+            });
+            if !loaded || !crate::remote::is_url(&library.location) {
+                continue;
+            }
+            self.downloads.update(cx, |downloads, cx| {
+                if library.keep_all {
+                    downloads.start(&library.location, None, cx);
+                } else if !library.keep.is_empty() {
+                    downloads.start(&library.location, Some(library.keep.clone()), cx);
+                }
+                downloads.measure(&library.location, cx);
+            });
+        }
+    }
+
+    /// Adds a library to the list, or turns it on when it is there already, and reads the
+    /// libraries again.
+    fn add_library(&mut self, location: String, cx: &mut Context<Self>) {
+        let mut libraries = self.settings.libraries();
+        match libraries.iter_mut().find(|l| l.location == location) {
+            Some(known) => known.on = true,
+            None => libraries.push(LibrarySource::new(location)),
+        }
+        self.settings.libraries = Some(libraries);
+        self.save_settings();
+        self.load(cx);
     }
 
     fn welcome(&self, problem: Option<&SharedString>, cx: &mut Context<Self>) -> impl IntoElement {
@@ -533,13 +590,12 @@ impl Arcwise {
                             .font_family(theme::DISPLAY_FONT)
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(24.))
-                            .child("Choose your lineup library"),
+                            .child("No lineups to show"),
                     )
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .child("Pick the folder that holds library.json."),
-                    )
+                    .child(div().text_color(theme::muted()).child(
+                        "Arcwise could not read any of its libraries. Check the connection, or \
+                         add a library folder that holds library.json.",
+                    ))
                     .children(problem.map(|problem| {
                         div()
                             .p(px(10.))
@@ -550,8 +606,17 @@ impl Arcwise {
                             .child(problem.clone())
                     }))
                     .child(
-                        ui::button("choose-library", "Choose folder…")
-                            .on_click(cx.listener(Self::choose_folder)),
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(
+                                ui::button("retry-libraries", "Try again")
+                                    .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                            )
+                            .child(
+                                ui::button("choose-library", "Add a folder…")
+                                    .on_click(cx.listener(Self::choose_folder)),
+                            ),
                     ),
             )
     }
@@ -582,13 +647,13 @@ impl Render for Arcwise {
                 Screen::Welcome { problem } => {
                     self.welcome(problem.as_ref(), cx).into_any_element()
                 }
-                Screen::Loading(path) => div()
+                Screen::Loading => div()
                     .size_full()
                     .flex()
                     .items_center()
                     .justify_center()
                     .text_color(theme::muted())
-                    .child(format!("Loading {}…", path.display()))
+                    .child("Loading lineups…")
                     .into_any_element(),
                 Screen::Browsing(_) => unreachable!("rendered above"),
             };
@@ -612,45 +677,97 @@ const SAVE_AFTER_MOVE: Duration = Duration::from_millis(500);
 /// How long the window waits for the library read since launch before opening without it.
 const PRELOAD_WAIT: Duration = Duration::from_millis(100);
 
-/// A library to read off the UI thread, and where to open it.
+/// The libraries to read off the UI thread, and where to open.
 pub struct Request {
-    path: PathBuf,
+    libraries: Vec<LibrarySource>,
     /// The command line's choice of where to start.
     args: Args,
-    /// What was on screen last, when this is the library open last time.
+    /// What was on screen last.
     last: Option<Last>,
 }
 
-/// A library read off the UI thread, with the pictures it first shows already decoded.
+/// The libraries read off the UI thread, merged, with the pictures they first show already
+/// decoded; or why none could be read.
 pub struct Opened {
-    path: PathBuf,
-    result: Result<(Library, Start, Vec<Picture>), LoadError>,
+    statuses: Vec<Status>,
+    result: Result<(Library, Start, Vec<Picture>), String>,
 }
 
 impl Request {
-    pub fn new(path: PathBuf, args: Args, settings: &Settings) -> Request {
-        let last = settings.last.clone().filter(|_| {
-            (settings.reopen_last || args.resume) && settings.library.as_ref() == Some(&path)
-        });
-        Request { path, args, last }
+    /// Reads the settings' list of libraries, or only the one the command line names.
+    pub fn new(args: Args, settings: &Settings) -> Request {
+        let libraries = match &args.library {
+            Some(location) => vec![LibrarySource::new(location.to_string_lossy())],
+            None => settings.libraries(),
+        };
+        let last = settings
+            .last
+            .clone()
+            .filter(|_| settings.reopen_last || args.resume);
+        Request {
+            libraries,
+            args,
+            last,
+        }
     }
 
-    /// Reads the library and decodes the pictures it opens on. Takes tens of milliseconds.
+    /// Reads every library turned on, at once, and decodes the pictures they open on. Folders
+    /// take tens of milliseconds; a library on the web as long as the web takes.
     pub fn open(self) -> Opened {
         let begun = Instant::now();
-        let library = Library::open(&self.path);
-        trace::task(|| "library".into(), begun);
-        let result = library.map(|library| {
+        let read: Vec<_> = std::thread::scope(|scope| {
+            let reading: Vec<_> = self
+                .libraries
+                .iter()
+                .map(|l| l.on.then(|| scope.spawn(|| sources::read(&l.location))))
+                .collect();
+            reading
+                .into_iter()
+                .map(|r| {
+                    r.map(|r| {
+                        r.join()
+                            .unwrap_or_else(|_| (Err("it could not be read".into()), false))
+                    })
+                })
+                .collect()
+        });
+        trace::task(|| "libraries".into(), begun);
+        let mut statuses = Vec::with_capacity(read.len());
+        let mut parts = Vec::new();
+        let mut problems = Vec::new();
+        for (library, read) in self.libraries.iter().zip(read) {
+            let state = match read {
+                None => SourceState::Off,
+                Some((Ok(part), stale)) => {
+                    let state = sources::loaded(&part, stale);
+                    parts.push(part);
+                    state
+                }
+                Some((Err(problem), _)) => {
+                    problems.push(format!("{}: {problem}", sources::title(&library.location)));
+                    SourceState::Failed(problem)
+                }
+            };
+            statuses.push(Status {
+                location: library.location.clone(),
+                state,
+            });
+        }
+        let result = if parts.is_empty() {
+            Err(if problems.is_empty() {
+                "Every library is turned off in the settings.".to_owned()
+            } else {
+                problems.join("\n")
+            })
+        } else {
+            let library = Library::merge(parts);
             let start = start(&library, self.args, self.last);
             let begun = Instant::now();
             let pictures = images::decode_all(browser::first_pictures(&library, start.clone()));
             trace::task(|| "first pictures".into(), begun);
-            (library, start, pictures)
-        });
-        Opened {
-            path: self.path,
-            result,
-        }
+            Ok((library, start, pictures))
+        };
+        Opened { statuses, result }
     }
 }
 
@@ -658,8 +775,7 @@ impl Request {
 /// hundred milliseconds opening the window.
 pub fn preload(args: &Result<Args, String>, settings: &Settings) -> Option<Receiver<Opened>> {
     let args = args.as_ref().ok()?;
-    let path = args.library.clone().or_else(|| settings.library.clone())?;
-    let request = Request::new(path, args.clone(), settings);
+    let request = Request::new(args.clone(), settings);
     let (opened, preload) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name("arcwise-preload".into())
@@ -757,21 +873,84 @@ mod tests {
 
     #[test]
     fn opening_where_it_was_left_can_be_turned_off() {
-        let path = PathBuf::from("lib");
         let settings = Settings {
-            library: Some(path.clone()),
             last: Some(last()),
             reopen_last: false,
             ..Settings::default()
         };
-        let request = Request::new(path.clone(), Args::default(), &settings);
+        let request = Request::new(Args::default(), &settings);
         assert_eq!(request.last, None);
         // Relaunching to apply a setting or an update still goes back there.
         let resume = Args {
             resume: true,
             ..Args::default()
         };
-        assert_eq!(Request::new(path, resume, &settings).last, Some(last()));
+        assert_eq!(Request::new(resume, &settings).last, Some(last()));
+    }
+
+    #[test]
+    fn the_libraries_are_the_lists_or_the_command_lines() {
+        let settings = Settings {
+            library: Some(r"D:\lineups".into()),
+            ..Settings::default()
+        };
+        let request = Request::new(Args::default(), &settings);
+        let locations: Vec<_> = request
+            .libraries
+            .iter()
+            .map(|l| l.location.as_str())
+            .collect();
+        assert_eq!(
+            locations,
+            [crate::remote::DEFAULT, r"D:\lineups"],
+            "the old folder is kept"
+        );
+        let args = Args {
+            library: Some("https://example.com/lib".into()),
+            ..Args::default()
+        };
+        let request = Request::new(args, &settings);
+        let locations: Vec<_> = request
+            .libraries
+            .iter()
+            .map(|l| l.location.as_str())
+            .collect();
+        assert_eq!(locations, ["https://example.com/lib"]);
+    }
+
+    #[test]
+    fn reads_the_libraries_turned_on_and_says_how_each_fared() {
+        let dir = std::env::temp_dir().join(format!("arcwise-app-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("library.json"),
+            include_bytes!("../../arcwise-core/tests/fixtures/library.json"),
+        )
+        .unwrap();
+        let folder = dir.to_string_lossy().into_owned();
+        let missing = dir.join("missing").to_string_lossy().into_owned();
+        let off = LibrarySource {
+            on: false,
+            ..LibrarySource::new("https://example.invalid/")
+        };
+        let settings = Settings {
+            libraries: Some(vec![
+                off,
+                LibrarySource::new(&folder),
+                LibrarySource::new(&missing),
+            ]),
+            ..Settings::default()
+        };
+        let opened = Request::new(Args::default(), &settings).open();
+        let (library, _, _) = opened.result.unwrap();
+        assert_eq!(library.lineups().len(), 9);
+        assert_eq!(opened.statuses[0].state, SourceState::Off);
+        assert!(matches!(
+            opened.statuses[1].state,
+            SourceState::Loaded { lineups: 9, .. }
+        ));
+        assert!(matches!(opened.statuses[2].state, SourceState::Failed(_)));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

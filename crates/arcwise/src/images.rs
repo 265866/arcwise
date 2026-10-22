@@ -280,7 +280,7 @@ fn decode(path: &Path, look: Look) -> anyhow::Result<Arc<RenderImage>> {
 }
 
 fn decode_now(path: &Path, look: Look) -> anyhow::Result<Arc<RenderImage>> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = crate::remote::read(path).with_context(|| format!("reading {}", path.display()))?;
     let is = |ext: &str| {
         path.extension()
             .is_some_and(|e| e.eq_ignore_ascii_case(ext))

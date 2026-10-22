@@ -16,8 +16,13 @@ use crate::theme;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// The library folder chosen last.
+    /// The library folder chosen last, before Arcwise read libraries from the web. Kept for an
+    /// older Arcwise; [`Settings::libraries`] carries it over.
     pub library: Option<PathBuf>,
+    /// The libraries lineups come from, in order: web addresses and folders. Unset until the list
+    /// is first changed, while [`Settings::libraries`] gives the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub libraries: Option<Vec<LibrarySource>>,
     /// What was on screen last, to open on next time.
     pub last: Option<Last>,
     /// Whether the window shows what is behind it, blurred.
@@ -52,6 +57,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             library: None,
+            libraries: None,
             last: None,
             blur: true,
             blur_strength: theme::DEFAULT_STRENGTH,
@@ -73,6 +79,37 @@ impl Default for Settings {
 fn updated(last: Option<&str>, current: &Version) -> bool {
     last.and_then(|last| Version::parse(last).ok())
         .is_some_and(|last| last < *current)
+}
+
+/// A library in the settings' list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LibrarySource {
+    /// A web address, or a folder on disk.
+    pub location: String,
+    /// Whether its lineups are shown.
+    #[serde(default = "shown")]
+    pub on: bool,
+    /// Maps whose lineups are kept on disk to use offline; only for a library on the web.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep: Vec<MapId>,
+    /// Whether every map is kept on disk, including ones the library adds later.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_all: bool,
+}
+
+fn shown() -> bool {
+    true
+}
+
+impl LibrarySource {
+    pub fn new(location: impl Into<String>) -> Self {
+        LibrarySource {
+            location: location.into(),
+            on: true,
+            keep: Vec::new(),
+            keep_all: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -106,6 +143,20 @@ fn strength<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> 
 }
 
 impl Settings {
+    /// The libraries to show: the list as last changed, or Arcwise's own library on the web,
+    /// followed by the folder chosen before there was a list.
+    pub fn libraries(&self) -> Vec<LibrarySource> {
+        self.libraries.clone().unwrap_or_else(|| {
+            std::iter::once(LibrarySource::new(crate::remote::DEFAULT))
+                .chain(
+                    self.library
+                        .as_ref()
+                        .map(|path| LibrarySource::new(path.to_string_lossy())),
+                )
+                .collect()
+        })
+    }
+
     pub fn path() -> Option<PathBuf> {
         std::env::var_os("APPDATA").map(|dir| Path::new(&dir).join("Arcwise").join("settings.json"))
     }
@@ -206,6 +257,12 @@ mod tests {
         let path = dir.join("nested").join("settings.json");
         let settings = Settings {
             library: Some(PathBuf::from(r"D:\lineups")),
+            libraries: Some(vec![LibrarySource {
+                location: "https://library.arcwise.fish/".into(),
+                on: false,
+                keep: vec![MapId::new("m-ascent")],
+                keep_all: false,
+            }]),
             last: Some(Last {
                 map: MapId::new("m-ascent"),
                 agent: AgentId::new("a-sova"),

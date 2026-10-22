@@ -19,6 +19,7 @@ libwebp-sys = "0.14"
 resvg = { version = "0.46", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 semver = "1"
 # Pinned: still 0.x, and each release refreshes the Sigstore trust root built into the app.
 sigstore-verify = { version = "=0.15.0", default-features = false, features = ["aws-lc-rs"] }
