@@ -7,10 +7,10 @@ beside them. The format, and a tool that checks a library and publishes it to th
 
 ## How Arcwise uses them
 
-The settings list the libraries Arcwise shows: https://library.arcwise.fish/ to begin with, and
+The settings list the libraries Arcwise shows: https://library.arcwise.lol/ to begin with, and
 any web address or folder added since. The list is kept in `%APPDATA%\Arcwise\settings.json`
 under `libraries`; until it is first changed, a folder chosen in an older Arcwise is added after
-https://library.arcwise.fish/.
+https://library.arcwise.lol/.
 
 - Lineups from every library ticked show together. A map or agent several libraries list shows
   once, as the first of them names it, and so does an ability of the same agent with the same

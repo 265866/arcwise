@@ -78,7 +78,7 @@ Alt and Shift, and each command can have two. Esc and the number keys stay as th
 
 ## Lineups
 
-Arcwise shows the lineups of https://library.arcwise.fish, streaming each clip and picture when
+Arcwise shows the lineups of https://library.arcwise.lol, streaming each clip and picture when
 it is first shown and keeping it for next time. The settings' **General** tab (the gear at the
 top right, or <kbd>Ctrl</kbd> <kbd>,</kbd>) lists the libraries it shows:
 

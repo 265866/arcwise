@@ -258,7 +258,7 @@ mod tests {
         let settings = Settings {
             library: Some(PathBuf::from(r"D:\lineups")),
             libraries: Some(vec![LibrarySource {
-                location: "https://library.arcwise.fish/".into(),
+                location: "https://library.arcwise.lol/".into(),
                 on: false,
                 keep: vec![MapId::new("m-ascent")],
                 keep_all: false,

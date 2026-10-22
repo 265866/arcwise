@@ -133,10 +133,7 @@ mod tests {
 
     #[test]
     fn titles_name_the_host_or_folder() {
-        assert_eq!(
-            title("https://library.arcwise.fish/"),
-            "library.arcwise.fish"
-        );
+        assert_eq!(title("https://library.arcwise.lol/"), "library.arcwise.lol");
         assert_eq!(title(r"D:\snapline\library"), "library");
         let status = Status {
             location: "https://x.y/".into(),

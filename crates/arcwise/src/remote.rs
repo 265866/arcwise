@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// The library Arcwise shows unless told otherwise.
-pub const DEFAULT: &str = "https://library.arcwise.fish/";
+pub const DEFAULT: &str = "https://library.arcwise.lol/";
 
 /// How long a server may take to take a request, and then to start answering it. Shorter in
 /// tests, so the test of a server that never answers is quick.
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn tells_addresses_from_folders() {
-        assert!(is_url("https://library.arcwise.fish"));
+        assert!(is_url("https://library.arcwise.lol"));
         assert!(is_url("  HTTP://localhost:8000/lib/"));
         assert!(!is_url(r"D:\lineups"));
         assert_eq!(base("https://a.b/lib//"), "https://a.b/lib/");
@@ -645,9 +645,9 @@ mod tests {
 
     #[test]
     fn a_mirror_is_named_for_the_host_and_path() {
-        let ours = mirror("https://library.arcwise.fish/").unwrap();
+        let ours = mirror("https://library.arcwise.lol/").unwrap();
         assert!(
-            ours.ends_with(r"Arcwise\libraries\library.arcwise.fish"),
+            ours.ends_with(r"Arcwise\libraries\library.arcwise.lol"),
             "{ours:?}"
         );
         let other = mirror("http://localhost:8000/my lib/").unwrap();
