@@ -8,8 +8,8 @@ use gpui::{
 };
 
 use super::{
-    Browser, ChangeLibrary, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength, SetCustomTitleBar,
-    SetReopenLast, SetStartSpeed, SetTheme, plural,
+    Browser, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength, SetCustomTitleBar, SetReopenLast,
+    SetStartSpeed, SetTheme,
 };
 use crate::pacing::Speed;
 use crate::settings::Settings;
@@ -376,73 +376,25 @@ impl Browser {
     }
 
     fn general(&self, cx: &mut Context<Self>) -> AnyElement {
-        let library = &self.library;
-        let root = library.root();
-        let name = root.file_name().map_or_else(
-            || root.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-        let counts = format!(
-            "{} · {}",
-            plural(library.lineups().len(), "lineup"),
-            plural(library.agents().len(), "agent")
-        );
-        group(
-            "Library",
-            vec![
-                setting()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child(name))
-                            .child(
-                                div()
-                                    .font_family(theme::MONO_FONT)
-                                    .text_size(px(12.))
-                                    .text_color(theme::muted())
-                                    .truncate()
-                                    .child(root.display().to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(theme::faint())
-                                    .child(counts),
-                            ),
+        self.libraries(cx)
+            .child(group(
+                "When Arcwise opens",
+                vec![
+                    toggle(
+                        "reopen-last",
+                        "Open where I left off",
+                        "The map, agent and side you had open last",
                     )
-                    .child(
-                        ui::button("change-library", "Change…").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.close_settings(cx);
-                                cx.emit(ChangeLibrary);
-                            },
-                        )),
-                    )
+                    .child(switch(self.reopen_last))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.reopen_last = !this.reopen_last;
+                        cx.emit(SetReopenLast(this.reopen_last));
+                        cx.notify();
+                    }))
                     .into_any_element(),
-            ],
-        )
-        .child(group(
-            "When Arcwise opens",
-            vec![
-                toggle(
-                    "reopen-last",
-                    "Open where I left off",
-                    "The map, agent and side you had open last",
-                )
-                .child(switch(self.reopen_last))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.reopen_last = !this.reopen_last;
-                    cx.emit(SetReopenLast(this.reopen_last));
-                    cx.notify();
-                }))
-                .into_any_element(),
-            ],
-        ))
-        .into_any_element()
+                ],
+            ))
+            .into_any_element()
     }
 
     fn playback(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -844,7 +796,7 @@ fn logo(size: Pixels) -> Div {
 }
 
 /// A titled card of settings, one to a row with lines between them.
-fn group(title: &str, rows: Vec<AnyElement>) -> Div {
+pub(super) fn group(title: &str, rows: Vec<AnyElement>) -> Div {
     let rows = rows.into_iter().enumerate().map(|(i, row)| {
         div()
             .when(i > 0, |d| d.border_t_1().border_color(theme::line()))
@@ -868,7 +820,7 @@ fn group(title: &str, rows: Vec<AnyElement>) -> Div {
 }
 
 /// A row in a [`group`]: what it sets, then its control.
-fn setting() -> Div {
+pub(super) fn setting() -> Div {
     div()
         .flex()
         .items_center()
@@ -893,7 +845,7 @@ fn name(text: &'static str) -> Div {
 }
 
 /// A setting's name with a line under it saying what it does.
-fn described(title: impl Into<SharedString>, about: impl Into<SharedString>) -> Div {
+pub(super) fn described(title: impl Into<SharedString>, about: impl Into<SharedString>) -> Div {
     div()
         .flex_1()
         .min_w_0()
@@ -910,7 +862,7 @@ fn described(title: impl Into<SharedString>, about: impl Into<SharedString>) -> 
 }
 
 /// A small text button at the end of a row, beside its switch.
-fn text_button(id: &'static str, label: &'static str) -> Stateful<Div> {
+pub(super) fn text_button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         // As tall as the switch beside it, so the row keeps its height when this shows.

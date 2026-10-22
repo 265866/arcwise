@@ -6,13 +6,16 @@
 mod app;
 mod args;
 mod browser;
+mod downloads;
 mod drawn;
 mod images;
 mod pacing;
 mod placement;
 mod player;
+mod remote;
 mod settings;
 mod shortcuts;
+mod sources;
 mod theme;
 mod titlebar;
 mod trace;

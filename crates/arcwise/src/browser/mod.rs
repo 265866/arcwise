@@ -6,6 +6,7 @@ mod follow;
 mod header;
 mod keyboard;
 mod keys;
+mod libraries;
 mod panel;
 mod part;
 mod settings_window;
@@ -86,6 +87,14 @@ pub struct Browser {
     minutes: Option<gpui::Task<()>>,
     /// What the settings window says about updates.
     updater: Entity<Updater>,
+    /// The settings' list of libraries, and how each fared when last read.
+    library_list: Vec<crate::settings::LibrarySource>,
+    library_statuses: Vec<crate::sources::Status>,
+    downloads: Entity<crate::downloads::Downloads>,
+    /// The library on the web whose maps to keep offline the settings show.
+    offline_open: Option<String>,
+    /// Whether "Paste address" was last clicked without a web address on the clipboard.
+    paste_hint: bool,
     /// Whether the pointer is dragging along the blur strength track.
     strength_drag: bool,
     slide: Slide,
@@ -123,9 +132,27 @@ impl EventEmitter<Chosen> for Browser {}
 
 /// Emitted when the user asks to open a different library.
 #[derive(Clone, Copy, Debug)]
-pub struct ChangeLibrary;
+pub struct AddLibraryFolder;
 
-impl EventEmitter<ChangeLibrary> for Browser {}
+/// What the settings show of the libraries, handed to a new [`Browser`].
+pub struct Libraries {
+    pub list: Vec<crate::settings::LibrarySource>,
+    pub statuses: Vec<crate::sources::Status>,
+    pub downloads: Entity<crate::downloads::Downloads>,
+    /// The settings tab to open on, when the libraries were read again from the settings.
+    pub reopen: Option<Tab>,
+}
+
+impl EventEmitter<AddLibraryFolder> for Browser {}
+
+/// The list of libraries changed in the settings; `reload` when which lineups show changes, not
+/// only which are kept offline.
+pub struct SetLibraries {
+    pub list: Vec<crate::settings::LibrarySource>,
+    pub reload: bool,
+}
+
+impl EventEmitter<SetLibraries> for Browser {}
 
 /// Emitted when the user turns background blur on or off, which [`crate::theme::blur`] already
 /// shows.
@@ -193,10 +220,13 @@ impl Browser {
         start: Start,
         pictures: Vec<Picture>,
         updater: Entity<Updater>,
+        libraries: Libraries,
         settings: &Settings,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&updater, |_, _, cx| cx.notify()).detach();
+        cx.observe(&libraries.downloads, |_, _, cx| cx.notify())
+            .detach();
         let images = cx.new(|_| {
             let mut images = Images::default();
             images.seed(pictures);
@@ -225,8 +255,8 @@ impl Browser {
                 player
             }),
             lightbox: None,
-            settings_open: false,
-            settings_tab: Tab::default(),
+            settings_open: libraries.reopen.is_some(),
+            settings_tab: libraries.reopen.unwrap_or_default(),
             reopen_last: settings.reopen_last,
             start_speed: settings.start_speed,
             recording: None,
@@ -236,6 +266,11 @@ impl Browser {
             activation: None,
             minutes: None,
             updater,
+            library_list: libraries.list,
+            library_statuses: libraries.statuses,
+            downloads: libraries.downloads,
+            offline_open: None,
+            paste_hint: false,
             strength_drag: false,
             slide: Slide::closed(),
             shown: None,

@@ -8,7 +8,7 @@ mod model;
 
 pub use browse::{Browse, Chooser, Direction, Start, View};
 pub use landing::{CLUSTER_RADIUS, Landing, LandingKey, cluster};
-pub use library::{FORMAT, Library, LoadError};
+pub use library::{FORMAT, Library, LoadError, Part};
 pub use model::{
     Ability, AbilityId, Agent, AgentId, Bolt, Bounces, Charge, Lineup, LineupId, Map, MapId, Point,
     Rgb, Role, Side, Spot, Steps, Tag,
