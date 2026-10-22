@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/265866/arcwise/compare/v0.7.0...v0.8.0) - 2026-10-22
+
+### Added
+
+- *(app)* theme can follow Windows, starting speed, open where left off, and check for updates now ([#21](https://github.com/265866/arcwise/pull/21))
+- *(app)* change keyboard shortcuts in the settings, with Ctrl, Alt and Shift and two per command ([#20](https://github.com/265866/arcwise/pull/20))
+- *(app)* settings open in a window of their own, with a tab for each kind ([#19](https://github.com/265866/arcwise/pull/19))
+
+### Fixed
+
+- *(app)* Arcwise fits a 1080p laptop at 150% scaling ([#22](https://github.com/265866/arcwise/pull/22))
+
 ## [0.7.0](https://github.com/265866/arcwise/compare/v0.6.0...v0.7.0) - 2026-10-21
 
 ### Added
