@@ -761,6 +761,12 @@ impl Request {
             })
         } else {
             let library = Library::merge(parts);
+            let mut skipped = library.skipped().iter();
+            for status in &mut statuses {
+                if let SourceState::Loaded { hidden, .. } = &mut status.state {
+                    *hidden = skipped.next().copied().unwrap_or_default();
+                }
+            }
             let start = start(&library, self.args, self.last);
             let begun = Instant::now();
             let pictures = images::decode_all(browser::first_pictures(&library, start.clone()));
@@ -928,6 +934,11 @@ mod tests {
         )
         .unwrap();
         let folder = dir.to_string_lossy().into_owned();
+        // A copy of the same library, lower in the list, whose lineups all show already.
+        let copy = dir.join("copy");
+        std::fs::create_dir_all(&copy).unwrap();
+        std::fs::copy(dir.join("library.json"), copy.join("library.json")).unwrap();
+        let copy = copy.to_string_lossy().into_owned();
         let missing = dir.join("missing").to_string_lossy().into_owned();
         let off = LibrarySource {
             on: false,
@@ -938,6 +949,7 @@ mod tests {
                 off,
                 LibrarySource::new(&folder),
                 LibrarySource::new(&missing),
+                LibrarySource::new(&copy),
             ]),
             ..Settings::default()
         };
@@ -947,9 +959,21 @@ mod tests {
         assert_eq!(opened.statuses[0].state, SourceState::Off);
         assert!(matches!(
             opened.statuses[1].state,
-            SourceState::Loaded { lineups: 9, .. }
+            SourceState::Loaded {
+                lineups: 9,
+                hidden: 0,
+                ..
+            }
         ));
         assert!(matches!(opened.statuses[2].state, SourceState::Failed(_)));
+        assert!(matches!(
+            opened.statuses[3].state,
+            SourceState::Loaded {
+                lineups: 9,
+                hidden: 9,
+                ..
+            }
+        ));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

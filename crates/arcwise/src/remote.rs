@@ -5,18 +5,33 @@
 //! (`?v=`, so caches may keep it for good) and checks it once fetched.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::fs::{self, OpenOptions, TryLockError};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, LazyLock, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
+use arcwise_core::Part;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// The library Arcwise shows unless told otherwise.
 pub const DEFAULT: &str = "https://library.arcwise.fish/";
+
+/// How long a server may take to take a request, and then to start answering it. Shorter in
+/// tests, so the test of a server that never answers is quick.
+const ANSWER_WITHIN: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(20)
+};
+
+/// How long `library.json` or `manifest.json` may take to arrive once the server answers.
+const INDEX_WITHIN: Duration = Duration::from_secs(120);
+
+/// The slowest link, in bytes a second, a file is still fetched over.
+const SLOWEST: u64 = 8_000;
 
 /// A file of a library, as its `manifest.json` lists it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,10 +53,61 @@ pub struct Remote {
     manifest: Manifest,
 }
 
+impl Remote {
+    /// Whether the library has a file. One without a manifest may have any.
+    fn has(&self, rel: &str) -> bool {
+        self.manifest.files.is_empty() || self.manifest.files.contains_key(rel)
+    }
+}
+
 /// Every library on the web shown, by the folder that mirrors it.
 static REMOTES: LazyLock<RwLock<HashMap<PathBuf, Arc<Remote>>>> = LazyLock::new(Default::default);
-/// Files being fetched in the background, so a file is fetched once at a time.
-static FETCHING: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Default::default);
+
+/// Files this Arcwise is fetching, so each is fetched by one thread at a time, and the threads
+/// waiting their turn.
+static FETCHING: LazyLock<(Mutex<HashSet<PathBuf>>, Condvar)> = LazyLock::new(Default::default);
+
+/// A thread's turn to fetch a file; the next thread waiting gets it when this drops.
+struct Claim(PathBuf);
+
+impl Claim {
+    fn try_take(path: &Path) -> Option<Claim> {
+        let (fetching, _) = &*FETCHING;
+        let mut fetching = fetching.lock().unwrap_or_else(|e| e.into_inner());
+        fetching
+            .insert(path.to_owned())
+            .then(|| Claim(path.to_owned()))
+    }
+
+    fn wait(path: &Path) -> Claim {
+        let (fetching, turn) = &*FETCHING;
+        let mut fetching = fetching.lock().unwrap_or_else(|e| e.into_inner());
+        while !fetching.insert(path.to_owned()) {
+            fetching = turn.wait(fetching).unwrap_or_else(|e| e.into_inner());
+        }
+        Claim(path.to_owned())
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let (fetching, turn) = &*FETCHING;
+        fetching
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+        turn.notify_all();
+    }
+}
+
+/// How fetching a file ended, when it did not fail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fetched {
+    /// The file is on disk.
+    Saved,
+    /// Another Arcwise is fetching it, so it is not on disk yet.
+    Elsewhere,
+}
 
 /// Whether a library location is a web address rather than a folder.
 pub fn is_url(location: &str) -> bool {
@@ -55,7 +121,7 @@ pub fn base(url: &str) -> String {
 }
 
 /// The folder mirroring the library at `url`: its host and path, with anything a folder name may
-/// not hold replaced.
+/// not hold replaced. None for a name of only dots, which would be a folder above it.
 pub fn mirror(url: &str) -> Option<PathBuf> {
     let rest = base(url);
     let rest = rest.split_once("://").map_or(rest.as_str(), |(_, r)| r);
@@ -70,6 +136,9 @@ pub fn mirror(url: &str) -> Option<PathBuf> {
             }
         })
         .collect();
+    if name.chars().all(|c| c == '.') {
+        return None;
+    }
     let local = std::env::var_os("LOCALAPPDATA")?;
     Some(
         Path::new(&local)
@@ -79,7 +148,7 @@ pub fn mirror(url: &str) -> Option<PathBuf> {
     )
 }
 
-pub fn agent() -> ureq::Agent {
+fn agent() -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder()
         .provider(ureq::tls::TlsProvider::Rustls)
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
@@ -89,8 +158,8 @@ pub fn agent() -> ureq::Agent {
         .tls_config(tls)
         .user_agent(format!("Arcwise/{}", env!("CARGO_PKG_VERSION")))
         .timeout_connect(Some(Duration::from_secs(10)))
-        // A body that stops arriving for this long is given up on; a slow one keeps going.
-        .timeout_recv_body(Some(Duration::from_secs(30)))
+        .timeout_send_request(Some(ANSWER_WITHIN))
+        .timeout_recv_response(Some(ANSWER_WITHIN))
         .build()
         .new_agent()
 }
@@ -98,26 +167,20 @@ pub fn agent() -> ureq::Agent {
 static AGENT: LazyLock<ureq::Agent> = LazyLock::new(agent);
 
 /// Reads `library.json` and `manifest.json` from the web into the library's folder, dropping files
-/// fetched before whose content has changed since. Without the web, the copies there stay, and
-/// `Ok(false)` says the library is shown as last fetched. A library without a manifest still
-/// works; its files are then kept until removed by hand.
+/// fetched before whose content has changed since. When either cannot be fetched or is not what
+/// it should be, the copies there stay, and `Ok(false)` says the library is shown as last
+/// fetched. A library without a manifest still works; its files are then kept until removed by
+/// hand.
 pub fn refresh(url: &str, mirror: &Path) -> anyhow::Result<bool> {
     let base = base(url);
-    let json = match get(&format!("{base}library.json")) {
-        Ok(json) => json,
+    let (json, manifest) = match fetch_index(&base) {
+        Ok(index) => index,
         Err(e) if mirror.join("library.json").is_file() => {
             eprintln!("arcwise: {base}: {e:#}; showing the copy from last time");
             register(mirror, base, load_manifest(mirror));
             return Ok(false);
         }
         Err(e) => return Err(e),
-    };
-    let manifest = match get(&format!("{base}manifest.json")) {
-        Ok(bytes) => Some(serde_json::from_slice::<Manifest>(&bytes).context("manifest.json")?),
-        Err(e) => {
-            eprintln!("arcwise: {base}manifest.json: {e:#}");
-            None
-        }
     };
     fs::create_dir_all(mirror).with_context(|| format!("creating {}", mirror.display()))?;
     if let Some(manifest) = &manifest {
@@ -136,6 +199,31 @@ pub fn refresh(url: &str, mirror: &Path) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// A library's `library.json` and `manifest.json` from the web, each checked; `None` for a
+/// library without a manifest.
+fn fetch_index(base: &str) -> anyhow::Result<(Vec<u8>, Option<Manifest>)> {
+    let json = get(&format!("{base}library.json"))?;
+    // Rooted at the address, so a library that is not one is named by it.
+    Part::parse(base, &json)?;
+    let manifest = match get(&format!("{base}manifest.json")) {
+        Ok(bytes) => Some(
+            serde_json::from_slice::<Manifest>(&bytes)
+                .with_context(|| format!("{base}manifest.json is not a manifest"))?,
+        ),
+        Err(e) if not_there(&e) => None,
+        Err(e) => return Err(e),
+    };
+    Ok((json, manifest))
+}
+
+/// Whether the server said it has no such file.
+fn not_there(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<ureq::Error>(),
+        Some(ureq::Error::StatusCode(404 | 410))
+    )
+}
+
 fn load_manifest(mirror: &Path) -> Manifest {
     fs::read(mirror.join("manifest.json"))
         .ok()
@@ -143,11 +231,14 @@ fn load_manifest(mirror: &Path) -> Manifest {
         .unwrap_or_default()
 }
 
-/// Deletes the copies of files whose SHA-256 changed or that the library no longer has.
+/// Deletes the copies of files whose SHA-256 changed or that the library no longer has, and
+/// what an attempt that stopped had fetched of them.
 fn drop_changed(mirror: &Path, old: &Manifest, new: &Manifest) {
     for (path, entry) in &old.files {
         if new.files.get(path) != Some(entry) {
-            let _ = fs::remove_file(mirror.join(path));
+            let path = mirror.join(path);
+            let _ = fs::remove_file(part_path(&path));
+            let _ = fs::remove_file(path);
         }
     }
 }
@@ -158,6 +249,25 @@ fn register(mirror: &Path, base: String, manifest: Manifest) {
         .write()
         .unwrap_or_else(|e| e.into_inner())
         .insert(mirror.to_owned(), remote);
+}
+
+/// Forgets a library on the web that has left the list, and deletes the folder mirroring it.
+pub fn forget(url: &str) -> io::Result<()> {
+    match mirror(url).filter(|_| is_url(url)) {
+        Some(mirror) => forget_mirror(&mirror),
+        None => Ok(()),
+    }
+}
+
+fn forget_mirror(mirror: &Path) -> io::Result<()> {
+    REMOTES
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(mirror);
+    match fs::remove_dir_all(mirror) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
 }
 
 /// The manifest of the library mirrored in `mirror`, when it is on the web.
@@ -192,13 +302,24 @@ fn address(remote: &Remote, rel: &str) -> String {
 }
 
 /// A file's bytes: from disk, or from the web into the library's folder when it is not there yet.
+/// A file the library's manifest does not list is not asked for.
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
     match fs::read(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let Some((remote, rel)) = find(path) else {
+            let Some((remote, rel)) = find(path).filter(|(remote, rel)| remote.has(rel)) else {
                 return Err(e);
             };
-            fetch(&remote, &rel, path).map_err(io::Error::other)?;
+            // Another Arcwise fetching it is waited for, a while.
+            let until = Instant::now() + Duration::from_secs(60);
+            while fetch(&remote, &rel, path).map_err(io::Error::other)? == Fetched::Elsewhere {
+                if Instant::now() > until {
+                    return Err(io::Error::new(
+                        io::ErrorKind::ResourceBusy,
+                        "another Arcwise is still fetching it",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
             fs::read(path)
         }
         result => result,
@@ -206,31 +327,24 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
 }
 
 /// What to play for a clip: the file when it is on disk, otherwise its address on the web, which
-/// Media Foundation streams. The clip is then fetched to disk in the background for next time.
+/// Media Foundation streams. The clip is then fetched to disk in the background for next time. A
+/// clip the library's manifest does not list stays the missing file.
 pub fn playable(path: &Path) -> PathBuf {
     if path.is_file() {
         return path.to_owned();
     }
-    let Some((remote, rel)) = find(path) else {
+    let Some((remote, rel)) = find(path).filter(|(remote, rel)| remote.has(rel)) else {
         return path.to_owned();
     };
     let url = address(&remote, &rel);
-    let path = path.to_owned();
-    if FETCHING
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(path.clone())
-    {
+    // Without a claim to take, a download or an earlier play is fetching it already.
+    if let Some(claim) = Claim::try_take(path) {
         std::thread::Builder::new()
             .name("arcwise-fetch".into())
             .spawn(move || {
-                if let Err(e) = fetch(&remote, &rel, &path) {
+                if let Err(e) = fetch_claimed(&remote, &rel, &claim, |_| {}) {
                     eprintln!("arcwise: {e:#}");
                 }
-                FETCHING
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(&path);
             })
             .ok();
     }
@@ -239,39 +353,80 @@ pub fn playable(path: &Path) -> PathBuf {
 
 /// Fetches one file of a library on the web to `path`, checking it against the manifest. Bytes
 /// already fetched by an attempt that stopped are kept and the rest asked for, and `progress`
-/// hears of each chunk.
+/// hears of each chunk. Another thread fetching the same file is waited for; another Arcwise
+/// fetching it gives [`Fetched::Elsewhere`].
 pub fn fetch_with(
     remote: &Remote,
     rel: &str,
     path: &Path,
+    progress: impl FnMut(u64),
+) -> anyhow::Result<Fetched> {
+    fetch_claimed(remote, rel, &Claim::wait(path), progress)
+}
+
+fn fetch_claimed(
+    remote: &Remote,
+    rel: &str,
+    claim: &Claim,
     mut progress: impl FnMut(u64),
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Fetched> {
+    let path = claim.0.as_path();
+    // Saved by the thread whose turn came before.
+    if let Ok(meta) = fs::metadata(path)
+        && meta.is_file()
+    {
+        progress(meta.len());
+        return Ok(Fetched::Saved);
+    }
     let url = address(remote, rel);
     let expected = remote.manifest.files.get(rel);
-    let part = path.with_extension(format!(
-        "{}part",
-        path.extension()
-            .map(|e| format!("{}.", e.to_string_lossy()))
-            .unwrap_or_default()
-    ));
+    let part = part_path(path);
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    let have = fs::metadata(&part).map_or(0, |m| m.len());
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&part)
+        .with_context(|| format!("writing {}", part.display()))?;
+    // Held until the file is saved, so another Arcwise does not write it too; closing the file
+    // lets go of it.
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(Fetched::Elsewhere),
+        Err(TryLockError::Error(e)) => {
+            return Err(e).with_context(|| format!("locking {}", part.display()));
+        }
+    }
+    // Saved by another Arcwise just before this one opened the part.
+    if path.is_file() {
+        return Ok(Fetched::Saved);
+    }
+    let have = file.metadata()?.len();
     let resume = have > 0 && expected.is_some_and(|e| have < e.size);
-    let mut request = AGENT.get(&url);
+    // ureq limits the time for the whole body, not for each read, so the limit allows for the
+    // slowest link; a connection that stalls is only given up on then.
+    let within = expected.map_or(Duration::from_secs(600), |e| {
+        Duration::from_secs(60 + e.size / SLOWEST)
+    });
+    let mut request = AGENT
+        .get(&url)
+        .config()
+        .timeout_recv_body(Some(within))
+        .build();
     if resume {
         request = request.header("Range", format!("bytes={have}-"));
     }
     let response = request.call().with_context(|| format!("fetching {url}"))?;
-    let partial = response.status() == 206;
-    let mut file = if resume && partial {
+    if resume && response.status() == 206 {
         progress(have);
-        OpenOptions::new().append(true).open(&part)
+        file.seek(SeekFrom::End(0))?;
     } else {
-        File::create(&part)
+        file.set_len(0)?;
+        file.rewind()?;
     }
-    .with_context(|| format!("writing {}", part.display()))?;
     let mut body = response.into_body().into_reader();
     let mut buf = vec![0; 256 * 1024];
     loop {
@@ -281,23 +436,40 @@ pub fn fetch_with(
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n])?;
+        file.write_all(&buf[..n])
+            .with_context(|| format!("writing {}", part.display()))?;
         progress(n as u64);
     }
-    drop(file);
-    if let Some(expected) = expected {
-        let got = sha256(&part)?;
-        if got != expected.sha256 {
-            let _ = fs::remove_file(&part);
+    // Checked against the manifest the fetch began with, and against the library's now, which
+    // reading the libraries again may have changed meanwhile.
+    let now = find(path).and_then(|(remote, _)| remote.manifest.files.get(rel).cloned());
+    if expected.is_some() || now.is_some() {
+        file.rewind()?;
+        let mut hasher = Sha256::new();
+        io::copy(&mut file, &mut hasher)?;
+        let got = format!("{:x}", hasher.finalize());
+        if expected.is_some_and(|e| e.sha256 != got) {
+            file.set_len(0)?;
             bail!("{url} did not match the library's manifest");
+        }
+        if now.is_none_or(|e| e.sha256 != got) {
+            file.set_len(0)?;
+            bail!("{url} changed in the library while it was fetched");
         }
     }
     fs::rename(&part, path).with_context(|| format!("saving {}", path.display()))?;
-    Ok(())
+    Ok(Fetched::Saved)
 }
 
-fn fetch(remote: &Remote, rel: &str, path: &Path) -> anyhow::Result<()> {
+fn fetch(remote: &Remote, rel: &str, path: &Path) -> anyhow::Result<Fetched> {
     fetch_with(remote, rel, path, |_| {})
+}
+
+/// Where a file is fetched to until it is whole.
+fn part_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".part");
+    path.with_file_name(name)
 }
 
 /// The library on the web mirrored in `mirror`.
@@ -309,17 +481,13 @@ pub fn remote(mirror: &Path) -> Option<Arc<Remote>> {
         .cloned()
 }
 
-pub fn sha256(path: &Path) -> anyhow::Result<String> {
-    let mut file = File::open(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher)?;
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
 fn get(url: &str) -> anyhow::Result<Vec<u8>> {
     let mut body = Vec::new();
     AGENT
         .get(url)
+        .config()
+        .timeout_recv_body(Some(INDEX_WITHIN))
+        .build()
         .call()
         .with_context(|| format!("fetching {url}"))?
         .into_body()
@@ -338,7 +506,133 @@ fn write_whole(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{BufRead, BufReader};
+    use std::net::TcpListener;
+    use std::sync::Barrier;
+
     use super::*;
+
+    const LIBRARY: &[u8] = include_bytes!("../../arcwise-core/tests/fixtures/library.json");
+
+    /// How the test server answers one path.
+    struct Reply {
+        status: u16,
+        body: Vec<u8>,
+        /// How long it waits before answering.
+        delay: Duration,
+    }
+
+    fn ok(body: impl Into<Vec<u8>>) -> Reply {
+        Reply {
+            status: 200,
+            body: body.into(),
+            delay: Duration::ZERO,
+        }
+    }
+
+    fn status(status: u16) -> Reply {
+        Reply {
+            status,
+            body: Vec::new(),
+            delay: Duration::ZERO,
+        }
+    }
+
+    /// A web server on this machine for one test. It answers each path, without its query, as
+    /// `answer` says, honours `Range`, and keeps the paths it was asked for.
+    struct Server {
+        base: String,
+        asked: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Server {
+        fn start(answer: impl Fn(&str) -> Reply + Send + Sync + 'static) -> Server {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let base = format!("http://{}/", listener.local_addr().unwrap());
+            let asked = Arc::new(Mutex::new(Vec::new()));
+            let answer = Arc::new(answer);
+            std::thread::spawn({
+                let asked = asked.clone();
+                move || {
+                    for stream in listener.incoming() {
+                        let Ok(mut stream) = stream else { continue };
+                        let asked = asked.clone();
+                        let answer = answer.clone();
+                        std::thread::spawn(move || {
+                            let mut reader = BufReader::new(stream.try_clone().unwrap());
+                            let mut line = String::new();
+                            reader.read_line(&mut line).unwrap();
+                            let target = line.split_whitespace().nth(1).unwrap_or_default();
+                            let path = target.split('?').next().unwrap_or_default();
+                            let path = path.trim_start_matches('/').to_owned();
+                            let mut from = 0;
+                            loop {
+                                let mut header = String::new();
+                                if reader.read_line(&mut header).unwrap_or(0) == 0
+                                    || header == "\r\n"
+                                {
+                                    break;
+                                }
+                                if let Some(range) =
+                                    header.to_ascii_lowercase().strip_prefix("range: bytes=")
+                                {
+                                    from = range.trim().trim_end_matches('-').parse().unwrap();
+                                }
+                            }
+                            asked.lock().unwrap().push(path.clone());
+                            let reply = answer(&path);
+                            std::thread::sleep(reply.delay);
+                            let (status, body) = if reply.status == 200 && from > 0 {
+                                (206, &reply.body[from..])
+                            } else {
+                                (reply.status, &reply.body[..])
+                            };
+                            let head = format!(
+                                "HTTP/1.1 {status} Answer\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(head.as_bytes());
+                            let _ = stream.write_all(body);
+                        });
+                    }
+                }
+            });
+            Server { base, asked }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    fn folder(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("arcwise-remote-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sha(bytes: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    fn manifest_of(files: &[(&str, &[u8])]) -> Manifest {
+        Manifest {
+            files: files
+                .iter()
+                .map(|(rel, bytes)| {
+                    (
+                        (*rel).to_owned(),
+                        Entry {
+                            size: bytes.len() as u64,
+                            sha256: sha(bytes),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
 
     #[test]
     fn tells_addresses_from_folders() {
@@ -364,10 +658,37 @@ mod tests {
     }
 
     #[test]
+    fn a_mirror_is_never_a_folder_above() {
+        assert_eq!(mirror("https://../"), None);
+        assert_eq!(mirror("https://."), None);
+        assert!(mirror("https://a..b/").unwrap().ends_with("a..b"));
+    }
+
+    #[test]
+    fn forgetting_a_library_deletes_its_mirror_alone() {
+        let dir = folder("forget");
+        let mirror = dir.join("x.y");
+        fs::create_dir_all(mirror.join("lineups")).unwrap();
+        fs::write(mirror.join("lineups/1.mp4"), "clip").unwrap();
+        fs::write(dir.join("beside"), "kept").unwrap();
+        register(&mirror, "http://x.y/".into(), Manifest::default());
+        forget_mirror(&mirror).unwrap();
+        assert!(!mirror.exists());
+        assert!(dir.join("beside").exists());
+        assert!(remote(&mirror).is_none());
+        // Gone already is fine.
+        forget_mirror(&mirror).unwrap();
+        // A folder library is never touched.
+        forget(&dir.to_string_lossy()).unwrap();
+        assert!(dir.join("beside").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn changed_and_removed_files_are_dropped() {
-        let dir = std::env::temp_dir().join(format!("arcwise-remote-{}", std::process::id()));
+        let dir = folder("drop");
         fs::create_dir_all(dir.join("lineups")).unwrap();
-        for name in ["same", "changed", "gone"] {
+        for name in ["same", "changed", "gone", "same.part", "changed.part"] {
             fs::write(dir.join("lineups").join(name), name).unwrap();
         }
         let entry = |sha: &str| Entry {
@@ -395,7 +716,12 @@ mod tests {
         };
         drop_changed(&dir, &old, &new);
         assert!(dir.join("lineups/same").exists());
+        assert!(dir.join("lineups/same.part").exists());
         assert!(!dir.join("lineups/changed").exists());
+        assert!(
+            !dir.join("lineups/changed.part").exists(),
+            "the old version's part would be resumed onto"
+        );
         assert!(!dir.join("lineups/gone").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -421,5 +747,257 @@ mod tests {
             "https://x.y/lineups/1.mp4?v=0123456789abcdef"
         );
         assert_eq!(address(&remote, "maps/a.webp"), "https://x.y/maps/a.webp");
+    }
+
+    /// A mirror holding a library and manifest from last time, and one clip of it.
+    fn last_time(name: &str) -> (PathBuf, Vec<u8>) {
+        let mirror = folder(name);
+        let manifest = serde_json::to_vec(&manifest_of(&[("lineups/1.mp4", b"clip")])).unwrap();
+        fs::write(mirror.join("library.json"), LIBRARY).unwrap();
+        fs::write(mirror.join("manifest.json"), &manifest).unwrap();
+        fs::create_dir_all(mirror.join("lineups")).unwrap();
+        fs::write(mirror.join("lineups/1.mp4"), "clip").unwrap();
+        (mirror, manifest)
+    }
+
+    #[test]
+    fn a_library_that_is_not_one_leaves_the_copy_from_last_time() {
+        let changed = serde_json::to_vec(&manifest_of(&[("lineups/1.mp4", b"new")])).unwrap();
+        let server = Server::start(move |path| match path {
+            "library.json" => ok("<html>Sign in to this network</html>"),
+            _ => ok(changed.clone()),
+        });
+        let (mirror, manifest) = last_time("html-library");
+        assert!(!refresh(&server.base, &mirror).unwrap(), "shown as stale");
+        assert_eq!(fs::read(mirror.join("library.json")).unwrap(), LIBRARY);
+        assert_eq!(fs::read(mirror.join("manifest.json")).unwrap(), manifest);
+        assert!(mirror.join("lineups/1.mp4").exists());
+        assert!(super::manifest(&mirror).unwrap().files["lineups/1.mp4"].sha256 == sha(b"clip"));
+        fs::remove_dir_all(&mirror).unwrap();
+    }
+
+    #[test]
+    fn a_manifest_that_is_not_one_leaves_the_copy_from_last_time() {
+        let mut library: serde_json::Value = serde_json::from_slice(LIBRARY).unwrap();
+        library["name"] = "Changed".into();
+        let library = serde_json::to_vec(&library).unwrap();
+        let server = Server::start(move |path| match path {
+            "library.json" => ok(library.clone()),
+            _ => ok("<html>Sign in to this network</html>"),
+        });
+        let (mirror, manifest) = last_time("html-manifest");
+        assert!(!refresh(&server.base, &mirror).unwrap(), "shown as stale");
+        assert_eq!(fs::read(mirror.join("library.json")).unwrap(), LIBRARY);
+        assert_eq!(fs::read(mirror.join("manifest.json")).unwrap(), manifest);
+        assert!(mirror.join("lineups/1.mp4").exists());
+        fs::remove_dir_all(&mirror).unwrap();
+
+        let broken = Server::start(|path| match path {
+            "library.json" => ok(LIBRARY),
+            _ => status(500),
+        });
+        let (mirror, manifest) = last_time("broken-manifest");
+        assert!(!refresh(&broken.base, &mirror).unwrap(), "shown as stale");
+        assert_eq!(fs::read(mirror.join("manifest.json")).unwrap(), manifest);
+        fs::remove_dir_all(&mirror).unwrap();
+    }
+
+    #[test]
+    fn a_library_that_is_not_one_and_was_never_fetched_fails() {
+        let server = Server::start(|_| ok("<html></html>"));
+        let mirror = folder("never");
+        let e = refresh(&server.base, &mirror).unwrap_err();
+        assert!(
+            e.chain().any(|c| c.is::<arcwise_core::LoadError>()),
+            "{e:#}"
+        );
+        assert!(!mirror.join("library.json").exists());
+        fs::remove_dir_all(&mirror).unwrap();
+    }
+
+    #[test]
+    fn a_server_that_does_not_answer_is_given_up_on() {
+        let server = Server::start(|_| Reply {
+            delay: Duration::from_secs(30),
+            ..ok(LIBRARY)
+        });
+        let (mirror, _) = last_time("stalled");
+        let begun = Instant::now();
+        assert!(!refresh(&server.base, &mirror).unwrap(), "shown as stale");
+        assert!(
+            begun.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            begun.elapsed()
+        );
+        fs::remove_dir_all(&mirror).unwrap();
+    }
+
+    #[test]
+    fn a_new_manifest_drops_what_changed() {
+        let changed = serde_json::to_vec(&manifest_of(&[("lineups/1.mp4", b"new")])).unwrap();
+        let server = Server::start({
+            let changed = changed.clone();
+            move |path| match path {
+                "library.json" => ok(LIBRARY),
+                _ => ok(changed.clone()),
+            }
+        });
+        let (mirror, _) = last_time("fresh");
+        fs::write(mirror.join("lineups/1.mp4.part"), "cl").unwrap();
+        assert!(refresh(&server.base, &mirror).unwrap());
+        assert!(!mirror.join("lineups/1.mp4").exists());
+        assert!(!mirror.join("lineups/1.mp4.part").exists());
+        let saved: Manifest =
+            serde_json::from_slice(&fs::read(mirror.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(saved.files["lineups/1.mp4"].sha256, sha(b"new"));
+        fs::remove_dir_all(&mirror).unwrap();
+
+        let without = Server::start(|path| match path {
+            "library.json" => ok(LIBRARY),
+            _ => status(404),
+        });
+        let (mirror, manifest) = last_time("no-manifest");
+        assert!(
+            refresh(&without.base, &mirror).unwrap(),
+            "a manifest is optional"
+        );
+        assert_eq!(fs::read(mirror.join("manifest.json")).unwrap(), manifest);
+        fs::remove_dir_all(&mirror).unwrap();
+    }
+
+    #[test]
+    fn a_file_the_manifest_does_not_list_is_not_asked_for() {
+        let server = Server::start(|_| ok("picture"));
+        let mirror = folder("unlisted");
+        register(
+            &mirror,
+            server.base.clone(),
+            manifest_of(&[("maps/m.webp", b"picture")]),
+        );
+        let aim = mirror.join("lineups/1-aim.webp");
+        assert_eq!(read(&aim).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(playable(&aim), aim);
+        assert_eq!(server.asked(), Vec::<String>::new());
+        assert_eq!(read(&mirror.join("maps/m.webp")).unwrap(), b"picture");
+        assert_eq!(server.asked(), ["maps/m.webp"]);
+        forget_mirror(&mirror).unwrap();
+    }
+
+    #[test]
+    fn one_file_is_fetched_by_one_thread_at_a_time() {
+        let clip = vec![7u8; 300_000];
+        let server = Server::start({
+            let clip = clip.clone();
+            move |_| Reply {
+                delay: Duration::from_millis(300),
+                ..ok(clip.clone())
+            }
+        });
+        let mirror = folder("claim");
+        register(
+            &mirror,
+            server.base.clone(),
+            manifest_of(&[("lineups/1.mp4", &clip)]),
+        );
+        let remote = remote(&mirror).unwrap();
+        let path = mirror.join("lineups/1.mp4");
+        let together = Barrier::new(2);
+        let fetched: Vec<_> = std::thread::scope(|scope| {
+            let fetching: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        together.wait();
+                        let mut got = 0;
+                        let fetched =
+                            fetch_with(&remote, "lineups/1.mp4", &path, |n| got += n).unwrap();
+                        (fetched, got)
+                    })
+                })
+                .collect();
+            fetching.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        assert_eq!(fetched, [(Fetched::Saved, 300_000); 2]);
+        assert_eq!(server.asked(), ["lineups/1.mp4"]);
+        assert_eq!(fs::read(&path).unwrap(), clip);
+        forget_mirror(&mirror).unwrap();
+    }
+
+    #[test]
+    fn a_file_another_arcwise_is_fetching_is_not_done_yet() {
+        let server = Server::start(|_| ok("clip"));
+        let mirror = folder("elsewhere");
+        register(
+            &mirror,
+            server.base.clone(),
+            manifest_of(&[("lineups/1.mp4", b"clip")]),
+        );
+        let remote = remote(&mirror).unwrap();
+        let path = mirror.join("lineups/1.mp4");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let other = fs::File::create(part_path(&path)).unwrap();
+        other.lock().unwrap();
+        assert_eq!(
+            fetch_with(&remote, "lineups/1.mp4", &path, |_| {}).unwrap(),
+            Fetched::Elsewhere
+        );
+        assert_eq!(
+            playable(&path),
+            PathBuf::from(address(&remote, "lineups/1.mp4"))
+        );
+        assert_eq!(server.asked(), Vec::<String>::new());
+        drop(other);
+        assert_eq!(
+            fetch_with(&remote, "lineups/1.mp4", &path, |_| {}).unwrap(),
+            Fetched::Saved
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"clip");
+        forget_mirror(&mirror).unwrap();
+    }
+
+    #[test]
+    fn a_fetch_resumes_where_it_stopped() {
+        let clip: Vec<u8> = (0..=255).collect();
+        let server = Server::start({
+            let clip = clip.clone();
+            move |_| ok(clip.clone())
+        });
+        let mirror = folder("resume");
+        register(
+            &mirror,
+            server.base.clone(),
+            manifest_of(&[("lineups/1.mp4", &clip)]),
+        );
+        let remote = remote(&mirror).unwrap();
+        let path = mirror.join("lineups/1.mp4");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(part_path(&path), &clip[..100]).unwrap();
+        let mut got = 0;
+        fetch_with(&remote, "lineups/1.mp4", &path, |n| got += n).unwrap();
+        assert_eq!(got, 256);
+        assert_eq!(fs::read(&path).unwrap(), clip);
+        assert!(!part_path(&path).exists());
+        forget_mirror(&mirror).unwrap();
+    }
+
+    #[test]
+    fn a_file_changed_while_it_was_fetched_is_not_saved() {
+        let server = Server::start(|_| ok("old"));
+        let mirror = folder("changed");
+        let old = Remote {
+            base: server.base.clone(),
+            manifest: manifest_of(&[("lineups/1.mp4", b"old")]),
+        };
+        // Read again meanwhile: the library has a new version of the clip.
+        register(
+            &mirror,
+            server.base.clone(),
+            manifest_of(&[("lineups/1.mp4", b"new")]),
+        );
+        let path = mirror.join("lineups/1.mp4");
+        let e = fetch_with(&old, "lineups/1.mp4", &path, |_| {}).unwrap_err();
+        assert!(e.to_string().contains("changed"), "{e:#}");
+        assert!(!path.exists());
+        assert_eq!(fs::metadata(part_path(&path)).unwrap().len(), 0);
+        forget_mirror(&mirror).unwrap();
     }
 }

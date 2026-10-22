@@ -3,8 +3,7 @@
 
 use arcwise_core::MapId;
 use gpui::{
-    AnyElement, ClipboardItem, Context, Div, FontWeight, SharedString, div, prelude::*, px,
-    relative, svg,
+    AnyElement, Context, Div, FontWeight, SharedString, div, prelude::*, px, relative, svg,
 };
 
 use super::settings_window::{described, group, setting, text_button};
@@ -25,16 +24,15 @@ impl Browser {
             .enumerate()
             .map(|(i, source)| self.library_row(i, source, cx))
             .collect();
-        let clipboard_url = cx
-            .read_from_clipboard()
-            .and_then(|item| item.text())
-            .map(|text| text.trim().to_owned())
-            .filter(|text| remote::is_url(text) && !text.contains(char::is_whitespace));
         rows.push(
             setting()
                 .child(described(
                     "Add a library",
-                    "A folder that holds library.json, or a library's web address copied to the clipboard",
+                    if self.paste_hint {
+                        "There is no web address on the clipboard. Copy a library's address, then paste it."
+                    } else {
+                        "A folder that holds library.json, or a library's web address copied to the clipboard"
+                    },
                 ))
                 .child(ui::button("add-library-folder", "Folder…").on_click(cx.listener(
                     |this, _, _, cx| {
@@ -44,13 +42,16 @@ impl Browser {
                 )))
                 .child(
                     ui::button("add-library-url", "Paste address")
-                        .when(clipboard_url.is_none(), |b| b.opacity(0.45))
-                        .tooltip(ui::tip(match &clipboard_url {
-                            Some(url) => format!("Add {url}"),
-                            None => "Copy a library's web address first".to_owned(),
-                        }))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let Some(url) = clipboard_url.clone() else {
+                        .tooltip(ui::tip("Add the library whose web address is on the clipboard"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let url = cx
+                                .read_from_clipboard()
+                                .and_then(|item| item.text())
+                                .map(|text| text.trim().to_owned())
+                                .filter(|text| remote::is_url(text) && !text.contains(char::is_whitespace));
+                            this.paste_hint = url.is_none();
+                            let Some(url) = url else {
+                                cx.notify();
                                 return;
                             };
                             let mut list = this.library_list.clone();
@@ -58,7 +59,6 @@ impl Browser {
                                 Some(known) => known.on = true,
                                 None => list.push(LibrarySource::new(remote::base(&url))),
                             }
-                            cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
                             this.set_libraries(list, true, cx);
                         })),
                 )
@@ -89,20 +89,11 @@ impl Browser {
             None | Some(State::Off) => "Off".to_owned(),
             Some(State::Loaded {
                 lineups,
+                hidden,
                 maps,
                 stale,
                 ..
-            }) => {
-                let mut line = format!(
-                    "{} · {}",
-                    plural(*lineups, "lineup"),
-                    plural(maps.len(), "map")
-                );
-                if *stale {
-                    line.push_str(" · could not reach it, so showing the copy from last time");
-                }
-                line
-            }
+            }) => loaded_line(*lineups, *hidden, maps.len(), *stale),
             Some(State::Failed(problem)) => capitalized(problem),
         };
         let failed = matches!(status.map(|s| &s.state), Some(State::Failed(_)));
@@ -184,7 +175,12 @@ impl Browser {
                     text_button(SharedString::from(format!("library-remove-{i}")), "Remove")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let mut list = this.library_list.clone();
-                            list.remove(i);
+                            let removed = list.remove(i);
+                            if this.offline_open.as_ref() == Some(&removed.location) {
+                                this.offline_open = None;
+                            }
+                            this.downloads
+                                .update(cx, |d, cx| d.forget(&removed.location, cx));
                             this.set_libraries(list, true, cx);
                         })),
                 )
@@ -249,7 +245,7 @@ impl Browser {
                     this.downloads.update(cx, |d, cx| {
                         if all {
                             let dropped = this.library_maps(&location).into_iter().filter(|m| !kept.contains(m)).collect();
-                            d.remove(&location, dropped, cx);
+                            d.remove(&location, dropped, kept, cx);
                         } else {
                             d.start(&location, None, cx);
                         }
@@ -280,8 +276,10 @@ impl Browser {
                         let keep = &mut list[i].keep;
                         if kept {
                             keep.retain(|m| *m != map);
-                            this.downloads
-                                .update(cx, |d, cx| d.remove(&location, vec![map.clone()], cx));
+                            let keep = keep.clone();
+                            this.downloads.update(cx, |d, cx| {
+                                d.remove(&location, vec![map.clone()], keep, cx)
+                            });
                         } else {
                             keep.push(map.clone());
                             let keep = keep.clone();
@@ -451,6 +449,21 @@ fn size(bytes: u64) -> String {
     }
 }
 
+/// What the settings say of a library that was read.
+fn loaded_line(lineups: usize, hidden: usize, maps: usize, stale: bool) -> String {
+    let mut line = format!("{} · {}", plural(lineups, "lineup"), plural(maps, "map"));
+    if hidden > 0 {
+        line.push_str(&format!(
+            " · {hidden} hidden, since a library above has the same {}",
+            if hidden == 1 { "one" } else { "ones" }
+        ));
+    }
+    if stale {
+        line.push_str(" · could not reach it, so showing the copy from last time");
+    }
+    line
+}
+
 fn capitalized(text: &str) -> String {
     let mut chars = text.chars();
     chars.next().map_or_else(String::new, |first| {
@@ -481,5 +494,18 @@ mod tests {
         assert_eq!(size(10), "1 MB");
         assert_eq!(plural(3752, "lineup"), "3,752 lineups");
         assert_eq!(plural(1, "map"), "1 map");
+    }
+
+    #[test]
+    fn a_library_says_how_many_of_its_lineups_are_hidden() {
+        assert_eq!(loaded_line(120, 0, 3, false), "120 lineups · 3 maps");
+        assert_eq!(
+            loaded_line(120, 3, 3, false),
+            "120 lineups · 3 maps · 3 hidden, since a library above has the same ones"
+        );
+        assert_eq!(
+            loaded_line(1, 1, 1, true),
+            "1 lineup · 1 map · 1 hidden, since a library above has the same one · could not reach it, so showing the copy from last time"
+        );
     }
 }

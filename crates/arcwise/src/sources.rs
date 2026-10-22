@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use arcwise_core::{MapId, Part};
+use arcwise_core::{LoadError, MapId, Part};
 
 use crate::remote;
 
@@ -16,6 +16,8 @@ pub enum State {
         /// What the library calls itself, when it says.
         name: Option<String>,
         lineups: usize,
+        /// Its lineups not shown, because a library above it in the list has the same ids.
+        hidden: usize,
         /// The maps with lineups, with how many each has.
         maps: Vec<(MapId, String, usize)>,
         /// For a library on the web, the copy fetched last time, since it could not be reached.
@@ -74,7 +76,7 @@ pub fn read(location: &str) -> (Result<Part, String>, bool) {
     if remote::is_url(location) {
         match remote::refresh(location, &root) {
             Ok(fresh) => stale = !fresh,
-            Err(e) => return (Err(format!("could not reach it: {}", reason(&e))), false),
+            Err(e) => return (Err(problem(&e)), false),
         }
     }
     let path = root.join("library.json");
@@ -84,6 +86,18 @@ pub fn read(location: &str) -> (Result<Part, String>, bool) {
             Part::parse(root, &bytes).map_err(|e| format!("{:#}", anyhow::Error::from(e)))
         });
     (part, stale)
+}
+
+/// Why a library on the web could not be read: what it sent was not a library, or it could not be
+/// reached.
+fn problem(e: &anyhow::Error) -> String {
+    if e.chain()
+        .any(|c| c.is::<LoadError>() || c.is::<serde_json::Error>())
+    {
+        format!("{e:#}")
+    } else {
+        format!("could not reach it: {}", reason(e))
+    }
 }
 
 /// The innermost cause of an error, as a person would say it: without the error number Windows adds.
@@ -97,11 +111,13 @@ fn reason(e: &anyhow::Error) -> String {
     cause.trim_end_matches('.').to_owned()
 }
 
-/// What reading a library says about it, for the settings.
+/// What reading a library says about it, for the settings; how many of its lineups are hidden is
+/// known once the libraries are merged.
 pub fn loaded(part: &Part, stale: bool) -> State {
     State::Loaded {
         name: part.name().map(str::to_owned),
         lineups: part.lineup_count(),
+        hidden: 0,
         maps: part
             .maps()
             .into_iter()
@@ -127,6 +143,7 @@ mod tests {
             state: State::Loaded {
                 name: Some("Mine".into()),
                 lineups: 1,
+                hidden: 0,
                 maps: vec![],
                 stale: false,
             },
@@ -141,6 +158,12 @@ mod tests {
         ))
         .context("fetching https://x.y/library.json");
         assert_eq!(reason(&e), "No such host is known");
+        assert_eq!(problem(&e), "could not reach it: No such host is known");
+        let html = Part::parse("https://x.y/", b"<html>").err().unwrap();
+        assert!(
+            problem(&anyhow::Error::from(html))
+                .starts_with("https://x.y/library.json is not a lineup library: "),
+        );
     }
 
     #[test]

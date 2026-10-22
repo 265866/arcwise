@@ -89,6 +89,8 @@ top right, or <kbd>Ctrl</kbd> <kbd>,</kbd>) lists the libraries it shows:
 - **Offline…** keeps a library's maps on your computer, chosen one by one or all of them, so their
   lineups play without a connection. When the library changes, Arcwise fetches only what changed.
   Unticking a map deletes its clips to free the room.
+- **Remove** takes a library off the list. For a library on the web, it also deletes the copy
+  Arcwise keeps of it.
 
 Without a connection, Arcwise shows a library on the web as it was last fetched. The
 [arcwise-library](https://github.com/265866/arcwise-library) repository describes the library

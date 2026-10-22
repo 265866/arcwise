@@ -175,7 +175,8 @@ pub struct Library {
     ability_index: HashMap<AbilityId, (usize, usize)>,
     lineup_index: HashMap<LineupId, usize>,
     counts: HashMap<(MapId, AgentId), usize>,
-    skipped: usize,
+    /// Per library, by index into `roots`: its lineups left out for an id already taken.
+    skipped: Vec<usize>,
 }
 
 impl Library {
@@ -208,10 +209,11 @@ impl Library {
             ability_index: HashMap::new(),
             lineup_index: HashMap::new(),
             counts: HashMap::new(),
-            skipped: 0,
+            skipped: Vec::with_capacity(parts.len()),
         };
         for (source, part) in parts.into_iter().enumerate() {
             library.roots.push(part.root);
+            library.skipped.push(0);
             library.add(source, part.file);
         }
         for agent in &mut library.agents {
@@ -281,7 +283,7 @@ impl Library {
         }
         for mut lineup in file.lineups {
             if self.lineup_index.contains_key(&lineup.id) {
-                self.skipped += 1;
+                self.skipped[source] += 1;
                 continue;
             }
             lineup.ability = ability_ids[&lineup.ability];
@@ -296,9 +298,10 @@ impl Library {
         &self.roots
     }
 
-    /// Lineups left out because a library earlier in the list has the same id.
-    pub fn skipped(&self) -> usize {
-        self.skipped
+    /// Per library, in the order merged: how many of its lineups are left out because a library
+    /// earlier in the list has the same id.
+    pub fn skipped(&self) -> &[usize] {
+        &self.skipped
     }
 
     pub fn maps(&self) -> &[Map] {

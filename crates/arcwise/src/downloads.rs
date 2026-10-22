@@ -116,28 +116,72 @@ impl Downloads {
     }
 
     /// Deletes the clips and pictures of the lineups on `maps` from disk, to make room. Maps,
-    /// agents and abilities stay, as every map shows them.
-    pub fn remove(&mut self, location: &str, maps: Vec<MapId>, cx: &mut Context<Self>) {
+    /// agents and abilities stay, as every map shows them. A download running starts again for
+    /// the maps still kept, `keep`, and the files go once its threads have finished the files
+    /// they are on, so it does not fetch them again.
+    pub fn remove(
+        &mut self,
+        location: &str,
+        maps: Vec<MapId>,
+        keep: Vec<MapId>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(mirror) = remote::mirror(location) else {
             return;
         };
-        let location = location.to_owned();
-        let work = cx.background_spawn(async move {
-            if let Some(part) = part(&mirror) {
-                for rel in part
-                    .files(Some(&maps))
-                    .iter()
-                    .filter(|f| f.starts_with("lineups/"))
-                {
-                    let _ = std::fs::remove_file(mirror.join(rel));
-                }
+        let running = self.running(location);
+        if running.is_some() {
+            if keep.is_empty() {
+                self.stop(location, cx);
+            } else {
+                self.start(location, Some(keep), cx);
             }
-        });
+        }
+        let location = location.to_owned();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            work.await;
+            if let Some(job) = running {
+                stopped(&job, cx).await;
+            }
+            cx.background_spawn(async move {
+                if let Some(part) = part(&mirror) {
+                    for rel in part
+                        .files(Some(&maps))
+                        .iter()
+                        .filter(|f| f.starts_with("lineups/"))
+                    {
+                        let _ = std::fs::remove_file(mirror.join(rel));
+                    }
+                }
+            })
+            .await;
             this.update(cx, |this, cx| this.measure(&location, cx)).ok();
         })
         .detach();
+    }
+
+    /// Stops the download of a library on the web that has left the list, and deletes the folder
+    /// mirroring it. A file being fetched into it then is not saved, as the library is gone.
+    pub fn forget(&mut self, location: &str, cx: &mut Context<Self>) {
+        if !remote::is_url(location) {
+            return;
+        }
+        self.stop(location, cx);
+        self.jobs.remove(location);
+        self.on_disk.remove(location);
+        let location = location.to_owned();
+        cx.background_spawn(async move {
+            if let Err(e) = remote::forget(&location) {
+                eprintln!("arcwise: deleting the copy of {location}: {e}");
+            }
+        })
+        .detach();
+    }
+
+    fn running(&self, location: &str) -> Option<Arc<Job>> {
+        self.jobs
+            .get(location)
+            .filter(|job| !job.finished.load(Ordering::Relaxed))
+            .cloned()
     }
 
     /// Works out how much of each map of a library on the web is on disk, for the settings.
@@ -156,6 +200,15 @@ impl Downloads {
             .ok();
         })
         .detach();
+    }
+}
+
+/// Once a download asked to stop has.
+async fn stopped(job: &Job, cx: &mut AsyncApp) {
+    while !job.finished.load(Ordering::Relaxed) {
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
     }
 }
 
@@ -225,9 +278,13 @@ fn download(mirror: &Path, maps: Option<&[MapId]>, job: &Job) {
                         got += n;
                         job.done.fetch_add(n, Ordering::Relaxed);
                     });
-                    if let Err(e) = fetched {
-                        eprintln!("arcwise: {e:#}");
-                        job.failed.fetch_add(1, Ordering::Relaxed);
+                    // A file another Arcwise is fetching is not a failure; this one fetches it
+                    // next time if it is still missing.
+                    if !matches!(fetched, Ok(remote::Fetched::Saved)) {
+                        if let Err(e) = fetched {
+                            eprintln!("arcwise: {e:#}");
+                            job.failed.fetch_add(1, Ordering::Relaxed);
+                        }
                         // Counted as done, so the bar still reaches its end.
                         job.done
                             .fetch_add(size.saturating_sub(got), Ordering::Relaxed);

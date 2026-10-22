@@ -246,7 +246,7 @@ fn merges_libraries_into_one() {
     assert_eq!(library.lineups().len(), 9 + 2);
     assert_eq!(
         library.skipped(),
-        1,
+        [0, 1],
         "the second library's lineup 1 is skipped"
     );
     assert_eq!(

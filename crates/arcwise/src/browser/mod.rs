@@ -93,6 +93,8 @@ pub struct Browser {
     downloads: Entity<crate::downloads::Downloads>,
     /// The library on the web whose maps to keep offline the settings show.
     offline_open: Option<String>,
+    /// Whether "Paste address" was last clicked without a web address on the clipboard.
+    paste_hint: bool,
     /// Whether the pointer is dragging along the blur strength track.
     strength_drag: bool,
     slide: Slide,
@@ -268,6 +270,7 @@ impl Browser {
             library_statuses: libraries.statuses,
             downloads: libraries.downloads,
             offline_open: None,
+            paste_hint: false,
             strength_drag: false,
             slide: Slide::closed(),
             shown: None,
