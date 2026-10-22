@@ -55,7 +55,7 @@ impl Browser {
                                 return;
                             };
                             let mut list = this.library_list.clone();
-                            match list.iter_mut().find(|l| remote::base(&l.location) == remote::base(&url)) {
+                            match list.iter_mut().find(|l| remote::same_mirror(&l.location, &url)) {
                                 Some(known) => known.on = true,
                                 None => list.push(LibrarySource::new(remote::base(&url))),
                             }
@@ -179,8 +179,11 @@ impl Browser {
                             if this.offline_open.as_ref() == Some(&removed.location) {
                                 this.offline_open = None;
                             }
+                            let shared = list
+                                .iter()
+                                .any(|l| remote::same_mirror(&l.location, &removed.location));
                             this.downloads
-                                .update(cx, |d, cx| d.forget(&removed.location, cx));
+                                .update(cx, |d, cx| d.forget(&removed.location, shared, cx));
                             this.set_libraries(list, true, cx);
                         })),
                 )

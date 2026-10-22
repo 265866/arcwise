@@ -120,12 +120,26 @@ pub fn base(url: &str) -> String {
     format!("{}/", url.trim().trim_end_matches('/'))
 }
 
-/// The folder mirroring the library at `url`: its host and path, with anything a folder name may
-/// not hold replaced. None for a name of only dots, which would be a folder above it.
+/// The folder mirroring the library at `url`, in `%LOCALAPPDATA%\Arcwise\libraries`. None for a
+/// name of only dots, which would be a folder above it.
 pub fn mirror(url: &str) -> Option<PathBuf> {
+    let name = mirror_name(url)?;
+    let local = std::env::var_os("LOCALAPPDATA")?;
+    Some(
+        Path::new(&local)
+            .join("Arcwise")
+            .join("libraries")
+            .join(name),
+    )
+}
+
+/// The name of the folder mirroring the library at `url`: its host, in lower case as hosts have
+/// no case, and its path, with anything a folder name may not hold replaced.
+fn mirror_name(url: &str) -> Option<String> {
     let rest = base(url);
     let rest = rest.split_once("://").map_or(rest.as_str(), |(_, r)| r);
-    let name: String = rest
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let name: String = format!("{}/{path}", host.to_ascii_lowercase())
         .trim_end_matches('/')
         .chars()
         .map(|c| {
@@ -136,16 +150,17 @@ pub fn mirror(url: &str) -> Option<PathBuf> {
             }
         })
         .collect();
-    if name.chars().all(|c| c == '.') {
-        return None;
-    }
-    let local = std::env::var_os("LOCALAPPDATA")?;
-    Some(
-        Path::new(&local)
-            .join("Arcwise")
-            .join("libraries")
-            .join(name),
-    )
+    (!name.chars().all(|c| c == '.')).then_some(name)
+}
+
+/// Whether two library locations are on the web and mirrored in one folder, which Windows names
+/// without regard to case. Its scheme does not name the folder either.
+pub fn same_mirror(a: &str, b: &str) -> bool {
+    is_url(a)
+        && is_url(b)
+        && mirror_name(a)
+            .zip(mirror_name(b))
+            .is_some_and(|(a, b)| a.eq_ignore_ascii_case(&b))
 }
 
 fn agent() -> ureq::Agent {
@@ -172,6 +187,7 @@ static AGENT: LazyLock<ureq::Agent> = LazyLock::new(agent);
 /// fetched. A library without a manifest still works; its files are then kept until removed by
 /// hand.
 pub fn refresh(url: &str, mirror: &Path) -> anyhow::Result<bool> {
+    Deleting::wait(mirror);
     let base = base(url);
     let (json, manifest) = match fetch_index(&base) {
         Ok(index) => index,
@@ -183,19 +199,19 @@ pub fn refresh(url: &str, mirror: &Path) -> anyhow::Result<bool> {
         Err(e) => return Err(e),
     };
     fs::create_dir_all(mirror).with_context(|| format!("creating {}", mirror.display()))?;
-    if let Some(manifest) = &manifest {
-        drop_changed(mirror, &load_manifest(mirror), manifest);
-        write_whole(
-            &mirror.join("manifest.json"),
-            &serde_json::to_vec(manifest)?,
-        )?;
+    match manifest {
+        Some(manifest) => {
+            let old = load_manifest(mirror);
+            let bytes = serde_json::to_vec(&manifest)?;
+            // Registered first, so a fetch saving a file of the old version after this either
+            // sees the new manifest and does not, or has saved it before the file is dropped.
+            register(mirror, base, manifest.clone());
+            drop_changed(mirror, &old, &manifest);
+            write_whole(&mirror.join("manifest.json"), &bytes)?;
+        }
+        None => register(mirror, base, load_manifest(mirror)),
     }
     write_whole(&mirror.join("library.json"), &json)?;
-    register(
-        mirror,
-        base,
-        manifest.unwrap_or_else(|| load_manifest(mirror)),
-    );
     Ok(true)
 }
 
@@ -251,22 +267,68 @@ fn register(mirror: &Path, base: String, manifest: Manifest) {
         .insert(mirror.to_owned(), remote);
 }
 
-/// Forgets a library on the web that has left the list, and deletes the folder mirroring it.
-pub fn forget(url: &str) -> io::Result<()> {
-    match mirror(url).filter(|_| is_url(url)) {
-        Some(mirror) => forget_mirror(&mirror),
-        None => Ok(()),
-    }
+/// Forgets a library on the web that has left the list. The folder mirroring it is deleted by
+/// [`Deleting::finish`], which can take a while, so it is left to another thread.
+pub fn forget(url: &str) -> Option<Deleting> {
+    let mirror = mirror(url).filter(|_| is_url(url))?;
+    Some(forget_mirror(&mirror))
 }
 
-fn forget_mirror(mirror: &Path) -> io::Result<()> {
+fn forget_mirror(mirror: &Path) -> Deleting {
     REMOTES
         .write()
         .unwrap_or_else(|e| e.into_inner())
         .remove(mirror);
-    match fs::remove_dir_all(mirror) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        result => result,
+    Deleting::begin(mirror)
+}
+
+/// Folders of libraries that left the list, while they are deleted, each with how many times.
+static DELETING: LazyLock<(Mutex<HashMap<PathBuf, usize>>, Condvar)> =
+    LazyLock::new(Default::default);
+
+/// A folder mirroring a library that left the list, to delete. Reading the library again, when
+/// it is added back meanwhile, waits until the folder is gone, so its fresh copy stays.
+#[must_use]
+pub struct Deleting(PathBuf);
+
+impl Deleting {
+    fn begin(mirror: &Path) -> Deleting {
+        let (deleting, _) = &*DELETING;
+        *deleting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(mirror.to_owned())
+            .or_default() += 1;
+        Deleting(mirror.to_owned())
+    }
+
+    pub fn finish(self) -> io::Result<()> {
+        match fs::remove_dir_all(&self.0) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+
+    fn wait(mirror: &Path) {
+        let (deleting, deleted) = &*DELETING;
+        let mut deleting = deleting.lock().unwrap_or_else(|e| e.into_inner());
+        while deleting.contains_key(mirror) {
+            deleting = deleted.wait(deleting).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+impl Drop for Deleting {
+    fn drop(&mut self) {
+        let (deleting, deleted) = &*DELETING;
+        let mut deleting = deleting.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = deleting.get_mut(&self.0) {
+            *n -= 1;
+            if *n == 0 {
+                deleting.remove(&self.0);
+            }
+        }
+        deleted.notify_all();
     }
 }
 
@@ -281,7 +343,10 @@ pub fn manifest(mirror: &Path) -> Option<Manifest> {
 
 /// The library on the web a local path belongs to, and the path's place in it.
 fn find(path: &Path) -> Option<(Arc<Remote>, String)> {
-    let remotes = REMOTES.read().unwrap_or_else(|e| e.into_inner());
+    find_in(&REMOTES.read().unwrap_or_else(|e| e.into_inner()), path)
+}
+
+fn find_in(remotes: &HashMap<PathBuf, Arc<Remote>>, path: &Path) -> Option<(Arc<Remote>, String)> {
     remotes.iter().find_map(|(root, remote)| {
         let rel = path.strip_prefix(root).ok()?;
         let rel: Vec<_> = rel.iter().map(|part| part.to_string_lossy()).collect();
@@ -304,7 +369,7 @@ fn address(remote: &Remote, rel: &str) -> String {
 /// A file's bytes: from disk, or from the web into the library's folder when it is not there yet.
 /// A file the library's manifest does not list is not asked for.
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
-    match fs::read(path) {
+    match read_saved(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             let Some((remote, rel)) = find(path).filter(|(remote, rel)| remote.has(rel)) else {
                 return Err(e);
@@ -320,35 +385,59 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
                 }
                 std::thread::sleep(Duration::from_millis(250));
             }
-            fs::read(path)
+            read_saved(path)
         }
         result => result,
     }
 }
 
+/// Reads a file from disk. A file a fetch has just saved stays locked until the fetch lets go of
+/// it, as Windows keeps the lock of its part on it once renamed; that is waited for, a moment.
+fn read_saved(path: &Path) -> io::Result<Vec<u8>> {
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    for _ in 0..10 {
+        match fs::read(path) {
+            Err(e) if e.raw_os_error() == Some(ERROR_LOCK_VIOLATION) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+    fs::read(path)
+}
+
 /// What to play for a clip: the file when it is on disk, otherwise its address on the web, which
-/// Media Foundation streams. The clip is then fetched to disk in the background for next time. A
-/// clip the library's manifest does not list stays the missing file.
+/// Media Foundation streams. A clip the library's manifest does not list stays the missing file.
 pub fn playable(path: &Path) -> PathBuf {
     if path.is_file() {
         return path.to_owned();
     }
-    let Some((remote, rel)) = find(path).filter(|(remote, rel)| remote.has(rel)) else {
-        return path.to_owned();
-    };
-    let url = address(&remote, &rel);
-    // Without a claim to take, a download or an earlier play is fetching it already.
-    if let Some(claim) = Claim::try_take(path) {
-        std::thread::Builder::new()
-            .name("arcwise-fetch".into())
-            .spawn(move || {
-                if let Err(e) = fetch_claimed(&remote, &rel, &claim, |_| {}) {
-                    eprintln!("arcwise: {e:#}");
-                }
-            })
-            .ok();
+    match find(path).filter(|(remote, rel)| remote.has(rel)) {
+        Some((remote, rel)) => PathBuf::from(address(&remote, &rel)),
+        None => path.to_owned(),
     }
-    PathBuf::from(url)
+}
+
+/// Fetches a clip that plays from the web to disk in the background, for next time.
+pub fn fetch_in_background(path: &Path) {
+    if path.is_file() {
+        return;
+    }
+    let Some((remote, rel)) = find(path).filter(|(remote, rel)| remote.has(rel)) else {
+        return;
+    };
+    // Without a claim to take, a download or an earlier play is fetching it already.
+    let Some(claim) = Claim::try_take(path) else {
+        return;
+    };
+    std::thread::Builder::new()
+        .name("arcwise-fetch".into())
+        .spawn(move || {
+            if let Err(e) = fetch_claimed(&remote, &rel, &claim, |_| {}) {
+                eprintln!("arcwise: {e:#}");
+            }
+        })
+        .ok();
 }
 
 /// Fetches one file of a library on the web to `path`, checking it against the manifest. Bytes
@@ -400,8 +489,9 @@ fn fetch_claimed(
             return Err(e).with_context(|| format!("locking {}", part.display()));
         }
     }
-    // Saved by another Arcwise just before this one opened the part.
+    // Saved by another Arcwise just before this one opened the part, which opening it made again.
     if path.is_file() {
+        let _ = fs::remove_file(&part);
         return Ok(Fetched::Saved);
     }
     let have = file.metadata()?.len();
@@ -440,24 +530,27 @@ fn fetch_claimed(
             .with_context(|| format!("writing {}", part.display()))?;
         progress(n as u64);
     }
-    // Checked against the manifest the fetch began with, and against the library's now, which
-    // reading the libraries again may have changed meanwhile.
-    let now = find(path).and_then(|(remote, _)| remote.manifest.files.get(rel).cloned());
-    if expected.is_some() || now.is_some() {
-        file.rewind()?;
-        let mut hasher = Sha256::new();
-        io::copy(&mut file, &mut hasher)?;
-        let got = format!("{:x}", hasher.finalize());
-        if expected.is_some_and(|e| e.sha256 != got) {
-            file.set_len(0)?;
-            bail!("{url} did not match the library's manifest");
-        }
-        if now.is_none_or(|e| e.sha256 != got) {
-            file.set_len(0)?;
-            bail!("{url} changed in the library while it was fetched");
-        }
+    file.rewind()?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher)?;
+    let got = format!("{:x}", hasher.finalize());
+    if expected.is_some_and(|e| e.sha256 != got) {
+        file.set_len(0)?;
+        bail!("{url} did not match the library's manifest");
+    }
+    // Checked as well against the library's manifest now, which reading the libraries again may
+    // have changed meanwhile. The libraries are held until the file is saved, so a new manifest
+    // is either checked here or registered after the file is saved, and `refresh` drops the file.
+    let remotes = REMOTES.read().unwrap_or_else(|e| e.into_inner());
+    let now =
+        find_in(&remotes, path).and_then(|(remote, _)| remote.manifest.files.get(rel).cloned());
+    if (expected.is_some() || now.is_some()) && now.is_none_or(|e| e.sha256 != got) {
+        file.set_len(0)?;
+        bail!("{url} changed in the library while it was fetched");
     }
     fs::rename(&part, path).with_context(|| format!("saving {}", path.display()))?;
+    drop(file);
+    drop(remotes);
     Ok(Fetched::Saved)
 }
 
@@ -658,6 +751,35 @@ mod tests {
     }
 
     #[test]
+    fn a_mirror_is_named_for_the_host_in_lower_case() {
+        assert_eq!(
+            mirror_name("HTTPS://LIBRARY.Arcwise.lol/").as_deref(),
+            Some("library.arcwise.lol")
+        );
+        assert_eq!(
+            mirror_name("http://Host:8000/My/Lib").as_deref(),
+            Some("host_8000_My_Lib")
+        );
+        assert_eq!(
+            mirror("https://LIBRARY.arcwise.lol"),
+            mirror("https://library.arcwise.lol/")
+        );
+    }
+
+    #[test]
+    fn libraries_in_one_folder_are_told_apart_from_the_rest() {
+        assert!(same_mirror(DEFAULT, "http://library.arcwise.lol"));
+        assert!(same_mirror(DEFAULT, "https://LIBRARY.arcwise.lol//"));
+        // Windows folders have no case, so the path's case does not tell them apart either.
+        assert!(same_mirror("https://a.b/Lib/", "https://a.b/lib"));
+        assert!(!same_mirror("https://a.b/lib/", "https://a.b/lib2/"));
+        assert!(!same_mirror(DEFAULT, "https://arcwise.lol/"));
+        assert!(!same_mirror("https://../", "https://../"));
+        assert!(!same_mirror(r"D:\lineups", r"D:\lineups"));
+        assert!(!same_mirror(r"D:\library.arcwise.lol", DEFAULT));
+    }
+
+    #[test]
     fn a_mirror_is_never_a_folder_above() {
         assert_eq!(mirror("https://../"), None);
         assert_eq!(mirror("https://."), None);
@@ -672,15 +794,56 @@ mod tests {
         fs::write(mirror.join("lineups/1.mp4"), "clip").unwrap();
         fs::write(dir.join("beside"), "kept").unwrap();
         register(&mirror, "http://x.y/".into(), Manifest::default());
-        forget_mirror(&mirror).unwrap();
+        forget_mirror(&mirror).finish().unwrap();
         assert!(!mirror.exists());
         assert!(dir.join("beside").exists());
         assert!(remote(&mirror).is_none());
         // Gone already is fine.
-        forget_mirror(&mirror).unwrap();
+        forget_mirror(&mirror).finish().unwrap();
         // A folder library is never touched.
-        forget(&dir.to_string_lossy()).unwrap();
+        assert!(forget(&dir.to_string_lossy()).is_none());
         assert!(dir.join("beside").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_library_added_back_while_its_folder_is_deleted_is_read_after() {
+        let server = Server::start(|path| match path {
+            "library.json" => ok(LIBRARY),
+            _ => status(404),
+        });
+        let (mirror, _) = last_time("added-back");
+        register(&mirror, server.base.clone(), Manifest::default());
+        let deleting = forget_mirror(&mirror);
+        let reading = std::thread::spawn({
+            let base = server.base.clone();
+            let mirror = mirror.clone();
+            move || refresh(&base, &mirror)
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!reading.is_finished(), "read before the folder was deleted");
+        assert_eq!(server.asked(), Vec::<String>::new());
+        deleting.finish().unwrap();
+        assert!(reading.join().unwrap().unwrap());
+        assert_eq!(fs::read(mirror.join("library.json")).unwrap(), LIBRARY);
+        assert!(!mirror.join("lineups/1.mp4").exists());
+        forget_mirror(&mirror).finish().unwrap();
+    }
+
+    #[test]
+    fn a_file_still_locked_by_the_fetch_that_saved_it_is_read_once_let_go() {
+        let dir = folder("locked");
+        let path = dir.join("1-aim.webp");
+        fs::write(&path, "picture").unwrap();
+        let saving = fs::File::open(&path).unwrap();
+        saving.lock().unwrap();
+        assert_eq!(fs::read(&path).unwrap_err().raw_os_error(), Some(33));
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            drop(saving);
+        });
+        assert_eq!(read(&path).unwrap(), b"picture");
+        letting_go.join().unwrap();
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -880,7 +1043,32 @@ mod tests {
         assert_eq!(server.asked(), Vec::<String>::new());
         assert_eq!(read(&mirror.join("maps/m.webp")).unwrap(), b"picture");
         assert_eq!(server.asked(), ["maps/m.webp"]);
-        forget_mirror(&mirror).unwrap();
+        forget_mirror(&mirror).finish().unwrap();
+    }
+
+    #[test]
+    fn a_clip_is_fetched_to_disk_only_once_it_plays() {
+        let server = Server::start(|_| ok("clip"));
+        let mirror = folder("plays");
+        register(
+            &mirror,
+            server.base.clone(),
+            manifest_of(&[("lineups/1.mp4", b"clip")]),
+        );
+        let path = mirror.join("lineups/1.mp4");
+        let url = PathBuf::from(address(&remote(&mirror).unwrap(), "lineups/1.mp4"));
+        assert_eq!(playable(&path), url);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(server.asked(), Vec::<String>::new(), "readied, not played");
+        fetch_in_background(&path);
+        let until = Instant::now() + Duration::from_secs(5);
+        while !path.is_file() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(read(&path).unwrap(), b"clip");
+        assert_eq!(server.asked(), ["lineups/1.mp4"]);
+        assert_eq!(playable(&path), path);
+        forget_mirror(&mirror).finish().unwrap();
     }
 
     #[test]
@@ -919,7 +1107,7 @@ mod tests {
         assert_eq!(fetched, [(Fetched::Saved, 300_000); 2]);
         assert_eq!(server.asked(), ["lineups/1.mp4"]);
         assert_eq!(fs::read(&path).unwrap(), clip);
-        forget_mirror(&mirror).unwrap();
+        forget_mirror(&mirror).finish().unwrap();
     }
 
     #[test]
@@ -951,7 +1139,7 @@ mod tests {
             Fetched::Saved
         );
         assert_eq!(fs::read(&path).unwrap(), b"clip");
-        forget_mirror(&mirror).unwrap();
+        forget_mirror(&mirror).finish().unwrap();
     }
 
     #[test]
@@ -976,7 +1164,7 @@ mod tests {
         assert_eq!(got, 256);
         assert_eq!(fs::read(&path).unwrap(), clip);
         assert!(!part_path(&path).exists());
-        forget_mirror(&mirror).unwrap();
+        forget_mirror(&mirror).finish().unwrap();
     }
 
     #[test]
@@ -998,6 +1186,6 @@ mod tests {
         assert!(e.to_string().contains("changed"), "{e:#}");
         assert!(!path.exists());
         assert_eq!(fs::metadata(part_path(&path)).unwrap().len(), 0);
-        forget_mirror(&mirror).unwrap();
+        forget_mirror(&mirror).finish().unwrap();
     }
 }

@@ -80,14 +80,18 @@ impl Player {
     }
 
     /// Plays a lineup's clip from the start, unless it is the one already playing. A clip of a
-    /// library on the web not on disk yet streams from the web.
+    /// library on the web not on disk yet streams from the web, and is fetched to disk meanwhile.
     /// Frames are scaled down to `max_height` rows, the most the viewer can show.
     pub fn play(&mut self, id: LineupId, path: PathBuf, max_height: u32, cx: &mut Context<Self>) {
         if self.clip == Some(id) {
             return;
         }
-        let path = remote::playable(&path);
+        let local = path;
+        let path = remote::playable(&local);
         let streams = remote::is_url(&path.to_string_lossy());
+        if streams {
+            remote::fetch_in_background(&local);
+        }
         self.reset();
         self.opened_as = self.generation;
         self.clip = Some(id);
@@ -103,7 +107,8 @@ impl Player {
         cx.notify();
     }
 
-    /// Readies a clip that may play next, so it shows at once if it does.
+    /// Readies a clip that may play next, so it shows at once if it does. One from the web is not
+    /// fetched to disk unless it plays, so pointing at many lineups does not fetch each.
     pub fn prepare(&self, path: PathBuf, max_height: u32) {
         if let Ok(decoder) = &self.decoder {
             decoder.prepare(remote::playable(&path), Some(max_height));

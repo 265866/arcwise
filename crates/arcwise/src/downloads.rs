@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use arcwise_core::{MapId, Part};
@@ -51,7 +51,11 @@ pub struct Downloads {
     jobs: HashMap<String, Arc<Job>>,
     /// Per library on the web, per map: how much is on disk.
     on_disk: HashMap<String, HashMap<MapId, OnDisk>>,
+    /// Per library on the web: the maps kept on disk as last asked, every map for `None`.
+    kept: HashMap<String, Arc<Mutex<Kept>>>,
 }
+
+type Kept = Option<Vec<MapId>>;
 
 impl Downloads {
     pub fn progress(&self, location: &str) -> Option<Progress> {
@@ -76,6 +80,7 @@ impl Downloads {
         let Some(mirror) = remote::mirror(location) else {
             return;
         };
+        *lock(&self.kept(location)) = maps.clone();
         let job = Arc::new(Job::default());
         self.jobs.insert(location.to_owned(), job.clone());
         let location = location.to_owned();
@@ -118,7 +123,7 @@ impl Downloads {
     /// Deletes the clips and pictures of the lineups on `maps` from disk, to make room. Maps,
     /// agents and abilities stay, as every map shows them. A download running starts again for
     /// the maps still kept, `keep`, and the files go once its threads have finished the files
-    /// they are on, so it does not fetch them again.
+    /// they are on, so it does not fetch them again. A map kept again meanwhile keeps its files.
     pub fn remove(
         &mut self,
         location: &str,
@@ -129,6 +134,8 @@ impl Downloads {
         let Some(mirror) = remote::mirror(location) else {
             return;
         };
+        let kept = self.kept(location);
+        *lock(&kept) = Some(keep.clone());
         let running = self.running(location);
         if running.is_some() {
             if keep.is_empty() {
@@ -142,39 +149,41 @@ impl Downloads {
             if let Some(job) = running {
                 stopped(&job, cx).await;
             }
-            cx.background_spawn(async move {
-                if let Some(part) = part(&mirror) {
-                    for rel in part
-                        .files(Some(&maps))
-                        .iter()
-                        .filter(|f| f.starts_with("lineups/"))
-                    {
-                        let _ = std::fs::remove_file(mirror.join(rel));
-                    }
-                }
-            })
-            .await;
+            cx.background_spawn(async move { delete_unkept(&mirror, &maps, &kept) })
+                .await;
             this.update(cx, |this, cx| this.measure(&location, cx)).ok();
         })
         .detach();
     }
 
     /// Stops the download of a library on the web that has left the list, and deletes the folder
-    /// mirroring it. A file being fetched into it then is not saved, as the library is gone.
-    pub fn forget(&mut self, location: &str, cx: &mut Context<Self>) {
+    /// mirroring it unless it is `shared` with another library in the list. A file being fetched
+    /// into the folder then is not saved, as the library is gone.
+    pub fn forget(&mut self, location: &str, shared: bool, cx: &mut Context<Self>) {
         if !remote::is_url(location) {
             return;
         }
         self.stop(location, cx);
         self.jobs.remove(location);
         self.on_disk.remove(location);
+        self.kept.remove(location);
+        if shared {
+            return;
+        }
+        let Some(deleting) = remote::forget(location) else {
+            return;
+        };
         let location = location.to_owned();
         cx.background_spawn(async move {
-            if let Err(e) = remote::forget(&location) {
+            if let Err(e) = deleting.finish() {
                 eprintln!("arcwise: deleting the copy of {location}: {e}");
             }
         })
         .detach();
+    }
+
+    fn kept(&mut self, location: &str) -> Arc<Mutex<Kept>> {
+        self.kept.entry(location.to_owned()).or_default().clone()
     }
 
     fn running(&self, location: &str) -> Option<Arc<Job>> {
@@ -209,6 +218,32 @@ async fn stopped(job: &Job, cx: &mut AsyncApp) {
         cx.background_executor()
             .timer(Duration::from_millis(50))
             .await;
+    }
+}
+
+fn lock(kept: &Mutex<Kept>) -> std::sync::MutexGuard<'_, Kept> {
+    kept.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Deletes the clips and pictures of the lineups on `maps`, each while its map is not `kept`.
+/// `kept` is held while a file is deleted, so a download for a map kept again meanwhile, which
+/// updates `kept` first, finds each file either gone or there to stay.
+fn delete_unkept(mirror: &Path, maps: &[MapId], kept: &Mutex<Kept>) {
+    let Some(part) = part(mirror) else {
+        return;
+    };
+    for map in maps {
+        for rel in part
+            .files(Some(std::slice::from_ref(map)))
+            .iter()
+            .filter(|f| f.starts_with("lineups/"))
+        {
+            let kept = lock(kept);
+            if kept.as_ref().is_none_or(|kept| kept.contains(map)) {
+                break;
+            }
+            let _ = std::fs::remove_file(mirror.join(rel));
+        }
     }
 }
 
@@ -294,4 +329,51 @@ fn download(mirror: &Path, maps: Option<&[MapId]>, job: &Job) {
         }
     });
     finish();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LIBRARY: &[u8] = include_bytes!("../../arcwise-core/tests/fixtures/library.json");
+
+    /// A mirror of the test library with the clip of lineup 1, on Ascent, and of lineup 7, on Bind.
+    fn mirror(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("arcwise-downloads-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("lineups")).unwrap();
+        std::fs::write(dir.join("library.json"), LIBRARY).unwrap();
+        for clip in ["lineups/1.mp4", "lineups/7.mp4"] {
+            std::fs::write(dir.join(clip), "clip").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn the_files_of_a_map_no_longer_kept_are_deleted() {
+        let dir = mirror("unkept");
+        let ascent = MapId::new("m-ascent");
+        let bind = MapId::new("m-bind");
+        delete_unkept(&dir, &[ascent], &Mutex::new(Some(vec![bind])));
+        assert!(!dir.join("lineups/1.mp4").exists());
+        assert!(dir.join("lineups/7.mp4").exists(), "on a map not removed");
+        assert!(dir.join("library.json").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_map_kept_again_before_its_files_go_keeps_them() {
+        let dir = mirror("kept-again");
+        let ascent = MapId::new("m-ascent");
+        delete_unkept(
+            &dir,
+            std::slice::from_ref(&ascent),
+            &Mutex::new(Some(vec![ascent.clone()])),
+        );
+        assert!(dir.join("lineups/1.mp4").exists());
+        delete_unkept(&dir, &[ascent], &Mutex::new(None));
+        assert!(dir.join("lineups/1.mp4").exists(), "every map kept again");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
