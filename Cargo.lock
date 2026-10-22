@@ -133,7 +133,7 @@ checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
 
 [[package]]
 name = "arcwise"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "arcwise-core",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "arcwise-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "arcwise-video"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "crossbeam-channel",
  "windows 0.62.2",
