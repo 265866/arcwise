@@ -39,7 +39,8 @@
       "title": "Shock A site from Main",
       "stand": { "x": 25, "y": 85, "callout": "A Main" }, "path": [[51, 51]],
       "land": { "x": 51, "y": 51, "callout": "A Site" },
-      "steps": { "setup": ["Charge 2 bars, 1 bounce"], "aim": null, "release": "Jump and left click on the way up", "note": "Jump throw" }
+      "steps": { "setup": ["Charge 2 bars, 1 bounce"], "aim": null, "release": "Jump and left click on the way up", "note": "Jump throw" },
+      "bolts": [{ "charge": 2, "bounces": 1 }, { "charge": 3, "bounces": 0, "aim": "Top of the antenna" }]
     },
     {
       "id": 3, "map": "m-ascent", "agent": "a-sova", "ability": 11, "side": "attack",
