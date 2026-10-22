@@ -306,7 +306,10 @@ impl Arcwise {
                     ui::icon_button("update-settings", ui::GEAR, px(30.), theme::muted())
                         .tooltip(ui::tip("Open settings"))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if browser.update(cx, |browser, cx| browser.open_menu(cx)) {
+                            let opened = browser.update(cx, |browser, cx| {
+                                browser.open_settings(Some(browser::Tab::Updates), cx)
+                            });
+                            if opened {
                                 this.updater.update(cx, |u, cx| u.dismiss_toast(cx));
                             }
                         }))

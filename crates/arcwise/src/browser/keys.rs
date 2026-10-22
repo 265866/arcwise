@@ -21,6 +21,7 @@ actions!(
         SlowMotion,
         SwitchSide,
         Close,
+        ToggleSettings,
     ]
 );
 
@@ -43,6 +44,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("s", SlowMotion, context),
         KeyBinding::new("tab", SwitchSide, context),
         KeyBinding::new("escape", Close, context),
+        KeyBinding::new("ctrl-,", ToggleSettings, context),
     ]);
 }
 
@@ -55,9 +57,9 @@ impl Browser {
         cx.notify();
     }
 
-    /// Whether keys should drive the map: not while a chooser or the menu covers it.
+    /// Whether keys should drive the map: not while a chooser or the settings window covers it.
     fn keys_reach_map(&self) -> bool {
-        self.browse.chooser().is_none() && self.lightbox.is_none() && !self.menu_open
+        self.browse.chooser().is_none() && self.lightbox.is_none() && !self.settings_open
     }
 
     pub(super) fn next_landing(&mut self, _: &NextLanding, _: &mut Window, cx: &mut Context<Self>) {
@@ -150,13 +152,12 @@ impl Browser {
         }
     }
 
-    /// Closes the topmost thing: the lightbox, the menu, the chooser if it can close, or the
-    /// lineup.
+    /// Closes the topmost thing: the lightbox, the settings window, the chooser if it can close,
+    /// or the lineup.
     pub(super) fn close(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
         if self.lightbox.take().is_none() {
-            if self.menu_open {
-                self.end_strength_drag(cx);
-                self.menu_open = false;
+            if self.settings_open {
+                self.close_settings(cx);
             } else if self.browse.chooser().is_some() {
                 self.browse.dismiss_chooser(&self.library);
             } else {
@@ -164,6 +165,19 @@ impl Browser {
             }
         }
         self.keyed(cx);
+    }
+
+    pub(super) fn toggle_settings(
+        &mut self,
+        _: &ToggleSettings,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_open {
+            self.close_settings(cx);
+        } else {
+            self.open_settings(None, cx);
+        }
     }
 
     /// The number keys pick an ability: 1 for all of them, 2 and up in slot order.

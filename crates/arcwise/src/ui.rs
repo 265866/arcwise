@@ -41,7 +41,7 @@ const RING: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34
 /// A quarter of [`RING`], from three o'clock to six.
 const ARC: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34"><path d="M32.5 17A15.5 15.5 0 0 1 17 32.5" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
 
-/// A cog, on the buttons that open the settings menu: teeth from a dashed ring, around a ring for
+/// A cog, on the buttons that open the settings window: teeth from a dashed ring, around a ring for
 /// the body.
 pub const GEAR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#000" stroke-width="3.5" stroke-dasharray="3.534 3.534"/><circle cx="12" cy="12" r="6" fill="none" stroke="#000" stroke-width="3"/></svg>"##;
 

@@ -5,12 +5,13 @@ mod chooser;
 mod follow;
 mod header;
 mod keys;
-mod menu;
 mod panel;
 mod part;
+mod settings_window;
 mod slide;
 
 pub use keys::bind as bind_keys;
+pub use settings_window::Tab;
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -59,9 +60,11 @@ pub struct Browser {
     player: Entity<Player>,
     /// A picture shown over the whole window.
     lightbox: Option<PathBuf>,
-    /// Whether the settings menu is open.
-    menu_open: bool,
-    /// What the settings menu says about updates.
+    /// Whether the settings window is open.
+    settings_open: bool,
+    /// The settings window's tab, kept while it is closed to open on again.
+    settings_tab: Tab,
+    /// What the settings window says about updates.
     updater: Entity<Updater>,
     /// Whether the pointer is dragging along the blur strength track.
     strength_drag: bool,
@@ -172,7 +175,8 @@ impl Browser {
             peek_view: None,
             player: cx.new(|_| Player::new()),
             lightbox: None,
-            menu_open: false,
+            settings_open: false,
+            settings_tab: Tab::default(),
             updater,
             strength_drag: false,
             slide: Slide::closed(),
@@ -459,6 +463,7 @@ impl Render for Browser {
             .on_action(cx.listener(Self::slow_motion))
             .on_action(cx.listener(Self::switch_side))
             .on_action(cx.listener(Self::close))
+            .on_action(cx.listener(Self::toggle_settings))
             .on_key_down(cx.listener(Self::number_key))
             .size_full()
             .relative()
@@ -498,8 +503,8 @@ impl Render for Browser {
                     .children(self.clip_note());
                 d.child(Follow::new(self.clip_slot.clone(), player))
             })
-            .children(self.menu_layer(cx))
             .children(self.chooser(window, cx))
+            .children(self.settings_window(cx))
             .children(self.lightbox(cx));
         self.waiting = self.images.read(cx).waiting();
         element

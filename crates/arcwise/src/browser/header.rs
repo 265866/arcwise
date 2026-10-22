@@ -15,7 +15,7 @@ impl Browser {
             .child(self.agent_picker(window, cx))
             .children(self.side_switch(cx))
             .child(div().flex_1())
-            .child(self.menu_button(cx))
+            .child(self.settings_button(cx))
     }
 
     fn map_picker(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -38,7 +38,7 @@ impl Browser {
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
-                this.menu_open = false;
+                this.close_settings(cx);
                 // The header stays usable over an enlarged picture, which a new choice puts away.
                 this.lightbox = None;
                 this.browse.toggle_chooser(&this.library, Chooser::Map);
@@ -71,7 +71,7 @@ impl Browser {
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
-                this.menu_open = false;
+                this.close_settings(cx);
                 this.lightbox = None;
                 this.browse.toggle_chooser(&this.library, Chooser::Agent);
                 cx.notify();
