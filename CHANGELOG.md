@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/265866/arcwise/compare/v0.8.1...v0.9.0) - 2026-10-22
+
+### Added
+
+- *(app)* show each Sova bolt's charge, bounces and aim as the bow's HUD ([#26](https://github.com/265866/arcwise/pull/26))
+
 ## [0.8.1](https://github.com/265866/arcwise/compare/v0.8.0...v0.8.1) - 2026-10-22
 
 ### Fixed
