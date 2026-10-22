@@ -1,9 +1,9 @@
 //! What Arcwise knows about updates, shared by the window, which shows toasts, and the settings
 //! window, which shows the version and an install button. Arcwise looks for a newer version when
 //! it opens, every [`CHECK_EVERY`] while it stays open, and when asked to. With automatic updates
-//! on, a newer version downloads in the background, a toast says it is ready, and it installs when
-//! Arcwise closes. With them off, a toast says it exists and the settings window offers to install
-//! it. Either way the settings gear wears a badge until it is installed.
+//! on, a newer version downloads in the background and installs when Arcwise closes, without a
+//! toast. With them off, a toast says it exists when Arcwise opens, and the settings window offers
+//! to install it. Either way the settings gear wears a badge until it is installed.
 
 use std::time::{Duration, Instant};
 
@@ -54,11 +54,9 @@ pub enum State {
 }
 
 pub enum Toast {
-    /// Shown for [`TOAST_LIFETIME`] when automatic updates are off.
-    Available(Version),
-    /// Downloaded with automatic updates on, to install when Arcwise closes. Shown for
+    /// Found by the check when Arcwise opens, with automatic updates off. Shown for
     /// [`TOAST_LIFETIME`].
-    Ready(Version),
+    Available(Version),
     /// This version, which replaced an older one since Arcwise last ran. Shown for
     /// [`TOAST_LIFETIME`].
     Updated(Version),
@@ -117,11 +115,12 @@ impl Updater {
             let latest = task.await;
             this.update(cx, |this, cx| {
                 this.checking = false;
+                let opening = this.checked.is_none();
                 this.checked = Some(Checked {
                     at: Instant::now(),
                     failed: latest.is_err(),
                 });
-                this.found(latest, cx);
+                this.found(latest, opening, cx);
                 cx.notify();
             })
             .ok();
@@ -165,7 +164,13 @@ impl Updater {
         }
     }
 
-    fn found(&mut self, latest: anyhow::Result<Option<Version>>, cx: &mut Context<Self>) {
+    /// With `opening`, the check Arcwise makes when it opens, the only one that shows a toast.
+    fn found(
+        &mut self,
+        latest: anyhow::Result<Option<Version>>,
+        opening: bool,
+        cx: &mut Context<Self>,
+    ) {
         let version = match latest {
             Ok(Some(version)) => version,
             Ok(None) => return,
@@ -189,7 +194,9 @@ impl Updater {
             // Again an hour after a download that failed.
             self.download(version, false, cx);
         } else if !matches!(&self.state, State::Available(known) if *known >= version) {
-            self.show(Toast::Available(version.clone()), cx);
+            if opening {
+                self.show(Toast::Available(version.clone()), cx);
+            }
             self.state = State::Available(version);
         }
         cx.notify();
@@ -204,10 +211,6 @@ impl Updater {
             State::Ready(update) if !on => {
                 self.state = State::Available(update.version.clone());
                 update::discard(update);
-                // It no longer installs on close.
-                if matches!(self.toast, Some(Toast::Ready(_))) {
-                    self.toast = None;
-                }
             }
             state => self.state = state,
         }
@@ -262,10 +265,7 @@ impl Updater {
         let install = matches!(self.state, State::Downloading { install: true, .. });
         match outcome {
             Ok(Outcome::Ready(update)) if install => self.install(update, cx),
-            Ok(Outcome::Ready(update)) if self.automatic => {
-                self.show(Toast::Ready(version), cx);
-                self.state = State::Ready(update);
-            }
+            Ok(Outcome::Ready(update)) if self.automatic => self.state = State::Ready(update),
             // Automatic updates were turned off while it downloaded.
             Ok(Outcome::Ready(update)) => {
                 update::discard(update);
