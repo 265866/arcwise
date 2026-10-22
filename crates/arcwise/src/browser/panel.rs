@@ -13,6 +13,7 @@ use super::Browser;
 use super::board::place;
 use crate::drawn::{Drawn, Line};
 use crate::images::{Image, Look};
+use crate::shortcuts::{Command, Shortcuts};
 use crate::{theme, ui};
 
 /// How far the stand view zooms into the map.
@@ -64,7 +65,7 @@ impl Browser {
                         .child(self.viewer(lineup, color, cx))
                         .child(self.step_tiles(lineup, color, cx))
                         .children(technique(lineup, color))
-                        .child(keys()),
+                        .child(keys(cx.global::<Shortcuts>())),
                 )
                 .into_any_element(),
         )
@@ -334,7 +335,7 @@ impl Browser {
         let tiles = [
             (
                 View::Clip,
-                "Q",
+                Command::WatchClip,
                 "Watch",
                 picture(
                     self.image(&self.library.start_still(lineup.id), cx).ready(),
@@ -343,13 +344,13 @@ impl Browser {
             ),
             (
                 View::Stand,
-                "W",
+                Command::ShowStand,
                 "1 · Stand",
                 self.stand_zoom(lineup, color, px(9.), self.stand_tile.clone(), false, cx),
             ),
             (
                 View::Aim,
-                "E",
+                Command::ShowAim,
                 "2 · Aim",
                 if has_aim {
                     picture(aim.ready(), false)
@@ -367,7 +368,7 @@ impl Browser {
             ),
             (
                 View::Lands,
-                "R",
+                Command::ShowLanding,
                 "3 · Lands",
                 picture(
                     self.image(&self.library.end_still(lineup.id), cx).ready(),
@@ -375,8 +376,10 @@ impl Browser {
                 ),
             ),
         ];
+        // Each tile's key as the settings have it, and none for a view left without one.
+        let shortcuts = cx.global::<Shortcuts>().clone();
         div().flex().gap(px(8.)).children(tiles.into_iter().map(
-            |(tile_view, key, label, media)| {
+            |(tile_view, command, label, media)| {
                 let on = tile_view == view;
                 let border: Hsla = if tile_view == pinned {
                     color
@@ -404,15 +407,23 @@ impl Browser {
                             .bg(gpui::black())
                             .child(media),
                     )
+                    // A long shortcut such as Ctrl+Shift+W shortens the name beside it rather than
+                    // spilling into the next tile.
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(6.))
+                            .min_w_0()
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(12.))
-                            .child(ui::kbd(key, false))
-                            .child(label),
+                            .children(shortcuts.first(command).map(|key| {
+                                ui::kbd(key.label(), false)
+                                    .flex_none()
+                                    .max_w(px(96.))
+                                    .overflow_hidden()
+                            }))
+                            .child(div().min_w_0().truncate().child(label)),
                     )
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         // A drag along the clip's progress bar that strays onto a tile keeps
@@ -562,15 +573,23 @@ fn number_box(n: usize, lit: Option<Hsla>) -> Div {
         .child(n.to_string())
 }
 
-/// The keyboard shortcuts, along the panel's foot.
-fn keys() -> Div {
-    let hint = |keys: &[&'static str], what: &'static str| {
-        div()
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .children(keys.iter().map(|k| ui::kbd(*k, false)))
-            .child(div().ml(px(2.)).child(what))
+/// The keyboard shortcuts, along the panel's foot: the first of each command's, as changed in
+/// the settings. A command left without a key is not shown.
+fn keys(shortcuts: &Shortcuts) -> Div {
+    let hint = |commands: &[Command], what: &'static str| {
+        let caps: Vec<_> = commands
+            .iter()
+            .filter_map(|&c| shortcuts.first(c))
+            .map(|s| ui::kbd(s.label(), false))
+            .collect();
+        (!caps.is_empty()).then(|| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .children(caps)
+                .child(div().ml(px(2.)).child(what))
+        })
     };
     div()
         .flex()
@@ -582,11 +601,24 @@ fn keys() -> Div {
         .border_color(theme::line())
         .text_size(px(12.))
         .text_color(theme::faint())
-        .child(hint(&["↑", "↓"], "landing"))
-        .child(hint(&["←", "→"], "throw from"))
-        .child(hint(&["Space"], "pause"))
-        .child(hint(&["Backspace"], "restart"))
-        .child(hint(&["S"], "slow-mo"))
-        .child(hint(&["Tab"], "side"))
-        .child(hint(&["Esc"], "close"))
+        .children(hint(
+            &[Command::PreviousLanding, Command::NextLanding],
+            "landing",
+        ))
+        .children(hint(
+            &[Command::PreviousStand, Command::NextStand],
+            "throw from",
+        ))
+        .children(hint(&[Command::TogglePause], "pause"))
+        .children(hint(&[Command::RestartClip], "restart"))
+        .children(hint(&[Command::SlowMotion], "slow-mo"))
+        .children(hint(&[Command::SwitchSide], "side"))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(ui::kbd("Esc", false))
+                .child(div().ml(px(2.)).child("close")),
+        )
 }

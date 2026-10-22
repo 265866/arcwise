@@ -69,38 +69,45 @@ file's line. The hash in `SHA256SUMS.txt` is lowercase.
 | <kbd>Backspace</kbd> | Play the clip again from the start |
 | <kbd>S</kbd> | Slow motion: ½×, then ¼×, then back to full speed |
 | <kbd>Tab</kbd> | Attack or defense |
-| <kbd>Esc</kbd> | Close the picture, menu, chooser or lineup |
+| <kbd>Esc</kbd> | Close the picture, settings, chooser or lineup |
+| <kbd>Ctrl</kbd> <kbd>,</kbd> | Open or close the settings |
+
+These are the defaults. Change them in the settings, under Keyboard: a shortcut can have Ctrl,
+Alt and Shift, and each command can have two. Esc and the number keys stay as they are.
 
 ## Lineups
 
 Arcwise does not come with lineups or download any. It reads a library folder on your computer;
 [docs/library-format.md](docs/library-format.md) describes the layout. On first run it asks for
-the folder, and the settings menu, behind the gear at the top right, opens another one.
+the folder. To open another one, open the settings with the gear at the top right, or
+<kbd>Ctrl</kbd> <kbd>,</kbd>, and click **Change…** under **General**.
 
 ## Appearance
 
-The settings menu switches between the dark theme, which Arcwise starts with, and a light one.
-It also turns background blur on or off and sets how much of it shows.
+The settings' **Appearance** tab switches between the dark theme, which Arcwise starts with, and
+a light one. It also turns background blur on or off and sets how much of it shows.
 
 Arcwise's header doubles as its title bar: drag it to move the window, double-click it to
 maximize, and use the minimize, maximize and close buttons at its right. To use Windows' own
-title bar instead, turn off **Custom title bar** in the settings menu and click **Relaunch**.
+title bar instead, turn off **Custom title bar** under **Appearance** and click **Relaunch**.
 
 Arcwise reopens where you left it: on the same monitor, at the same size, and maximized if it
 was. If that monitor isn't connected, it opens in the middle of your main one.
 
 ## Updates
 
-When an installed Arcwise opens, it asks GitHub whether a newer release exists. With
-**Automatic updates** on in the settings menu, as they are at first, Arcwise downloads the new
-installer in the background and installs it when you close Arcwise. Before that, it checks the
+An installed Arcwise asks GitHub whether a newer release exists when it opens, and every hour
+while it stays open. With **Automatic updates** on in the settings' **Updates** tab, as they are
+at first, Arcwise downloads the new installer in the background, says it is ready, and installs it
+when you close Arcwise; **Restart now** installs it at once. Before that, it checks the
 installer's attestation as `gh attestation verify` does, and that the release workflow built that
 exact installer on `main`. An installer that fails the check is deleted, and a message links to
 the releases page instead.
 
-With **Automatic updates** off, a message says a new version is available, and a badge shows on
-the settings gear. The bottom of the settings menu shows the version you have and the new one,
-with a button that updates Arcwise and relaunches it.
+With **Automatic updates** off, a message says a new version is available. Either way, a badge
+shows on the settings gear until the new version is installed, and the **Updates** tab shows the
+version you have and the new one, with a button that updates Arcwise and relaunches it. After an
+update, Arcwise says which version it is now.
 
 An `arcwise.exe` run from the zip doesn't update itself. Get new versions from the
 [releases page](https://github.com/265866/arcwise/releases/latest).

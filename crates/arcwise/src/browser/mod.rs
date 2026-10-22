@@ -4,16 +4,17 @@ mod board;
 mod chooser;
 mod follow;
 mod header;
+mod keyboard;
 mod keys;
 mod panel;
 mod part;
 mod settings_window;
 mod slide;
 
-pub use keys::bind as bind_keys;
 pub use settings_window::Tab;
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -24,7 +25,7 @@ use arcwise_core::{
 };
 use gpui::{
     Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Pixels,
-    StyleRefinement, Window, div, prelude::*,
+    StyleRefinement, Subscription, Window, div, prelude::*,
 };
 
 use crate::drawn::Drawn;
@@ -64,6 +65,17 @@ pub struct Browser {
     settings_open: bool,
     /// The settings window's tab, kept while it is closed to open on again.
     settings_tab: Tab,
+    /// The shortcut being chosen in the Keyboard tab.
+    recording: Option<keyboard::Recording>,
+    /// A shortcut chosen that another command already has, waiting for a yes or no.
+    conflict: Option<keyboard::Conflict>,
+    /// The key press that last ended choosing a shortcut, and when it last came, swallowed while
+    /// Windows repeats it.
+    ended_by: Option<(gpui::Keystroke, std::time::Instant)>,
+    /// Hands key presses to [`Browser::recorded`] while a shortcut is being chosen.
+    _intercept: Subscription,
+    /// Calls [`Browser::activation_changed`]; made on the first render, which has the window.
+    activation: Option<Subscription>,
     /// What the settings window says about updates.
     updater: Entity<Updater>,
     /// Whether the pointer is dragging along the blur strength track.
@@ -141,6 +153,13 @@ pub struct SetCustomTitleBar(pub bool);
 
 impl EventEmitter<SetCustomTitleBar> for Browser {}
 
+/// Emitted when the user changes a keyboard shortcut, with every one that differs from the
+/// defaults, as [`crate::shortcuts::Shortcuts::changes`] gives them.
+#[derive(Clone, Debug)]
+pub struct SetShortcuts(pub BTreeMap<String, Vec<String>>);
+
+impl EventEmitter<SetShortcuts> for Browser {}
+
 /// Emitted when the user asks Arcwise to relaunch, to apply a setting that needs a new window.
 #[derive(Clone, Copy, Debug)]
 pub struct Relaunch;
@@ -164,6 +183,12 @@ impl Browser {
         });
         cx.observe(&images, |_, _, cx| cx.notify()).detach();
         let browse = Browse::new(&library, start);
+        let browser = cx.weak_entity();
+        let intercept = cx.intercept_keystrokes(move |event, _, cx| {
+            browser
+                .update(cx, |browser, cx| browser.recorded(&event.keystroke, cx))
+                .ok();
+        });
         let this = Browser {
             library,
             browse,
@@ -177,6 +202,11 @@ impl Browser {
             lightbox: None,
             settings_open: false,
             settings_tab: Tab::default(),
+            recording: None,
+            conflict: None,
+            ended_by: None,
+            _intercept: intercept,
+            activation: None,
             updater,
             strength_drag: false,
             slide: Slide::closed(),
@@ -440,6 +470,11 @@ impl Render for Browser {
         } else if open == 0. {
             self.shown = None;
         }
+        if self.activation.is_none() {
+            self.activation = Some(cx.observe_window_activation(window, |this, _, cx| {
+                this.activation_changed(cx);
+            }));
+        }
         self.sync_player(window, cx);
         self.prefetch_map(cx);
         self.prefetch(cx);
@@ -449,7 +484,7 @@ impl Render for Browser {
         let parts = self.parts(cx);
         let element = div()
             .track_focus(&self.focus)
-            .key_context(keys::CONTEXT)
+            .key_context(crate::shortcuts::CONTEXT)
             .on_action(cx.listener(Self::next_landing))
             .on_action(cx.listener(Self::previous_landing))
             .on_action(cx.listener(Self::next_stand))
@@ -462,9 +497,10 @@ impl Render for Browser {
             .on_action(cx.listener(Self::restart_clip))
             .on_action(cx.listener(Self::slow_motion))
             .on_action(cx.listener(Self::switch_side))
-            .on_action(cx.listener(Self::close))
             .on_action(cx.listener(Self::toggle_settings))
-            .on_key_down(cx.listener(Self::number_key))
+            .on_key_down(cx.listener(Self::fixed_key))
+            .on_modifiers_changed(cx.listener(Self::modifiers_changed))
+            .on_key_up(cx.listener(Self::key_released))
             .size_full()
             .relative()
             .flex()
@@ -504,7 +540,7 @@ impl Render for Browser {
                 d.child(Follow::new(self.clip_slot.clone(), player))
             })
             .children(self.chooser(window, cx))
-            .children(self.settings_window(cx))
+            .children(self.settings_window(window, cx))
             .children(self.lightbox(cx));
         self.waiting = self.images.read(cx).waiting();
         element

@@ -15,7 +15,7 @@ use gpui::{
 use crate::args::Args;
 use crate::browser::{
     self, Browser, ChangeLibrary, Chosen, Relaunch, SetAutoUpdate, SetBlur, SetBlurStrength,
-    SetCustomTitleBar, SetTheme,
+    SetCustomTitleBar, SetShortcuts, SetTheme,
 };
 use crate::images::{self, Picture};
 use crate::placement::Placement;
@@ -194,6 +194,14 @@ impl Arcwise {
                     &browser,
                     |this, _, &SetCustomTitleBar(on): &SetCustomTitleBar, _| {
                         this.settings.custom_title_bar = on;
+                        this.save_settings();
+                    },
+                )
+                .detach();
+                cx.subscribe(
+                    &browser,
+                    |this, _, SetShortcuts(changes): &SetShortcuts, _| {
+                        this.settings.shortcuts = changes.clone();
                         this.save_settings();
                     },
                 )

@@ -12,6 +12,7 @@ mod pacing;
 mod placement;
 mod player;
 mod settings;
+mod shortcuts;
 mod theme;
 mod titlebar;
 mod trace;
@@ -60,7 +61,7 @@ fn main() {
             })
             .detach();
         }
-        browser::bind_keys(cx);
+        shortcuts::apply(shortcuts::Shortcuts::with_changes(&settings.shortcuts), cx);
         let (window_bounds, display_id) = placement::restore(settings.window.as_ref(), cx);
         cx.open_window(
             WindowOptions {

@@ -31,6 +31,7 @@ const LOGO_DIAMOND: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox
 const FOLDER: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="#000" stroke-width="2" stroke-linejoin="round"/></svg>"##;
 const CONTRAST: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="#000" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 0 0 17z"/></svg>"##;
 const UPDATES: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="#000" stroke-width="2"/><path d="M12 16V8.5M8.75 11.5 12 8.25l3.25 3.25" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+const KEYBOARD: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="#000" stroke-width="2"/><path d="M6.5 10h.01M10.5 10h.01M14.5 10h.01M18 10h.01M7.5 14h9" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round"/></svg>"##;
 /// A cross, on the button that closes the window.
 const CROSS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/></svg>"##;
 
@@ -38,7 +39,7 @@ const CROSS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2
 const KNOB: Pixels = px(14.);
 
 /// The window's largest size; it shrinks with Arcwise's, and its tabs scroll when they do not fit.
-const WIDTH: Pixels = px(860.);
+pub(super) const WIDTH: Pixels = px(860.);
 const HEIGHT: Pixels = px(600.);
 
 /// A page of the settings window.
@@ -47,16 +48,18 @@ pub enum Tab {
     #[default]
     General,
     Appearance,
+    Keyboard,
     Updates,
 }
 
 impl Tab {
-    const ALL: [Tab; 3] = [Tab::General, Tab::Appearance, Tab::Updates];
+    const ALL: [Tab; 4] = [Tab::General, Tab::Appearance, Tab::Keyboard, Tab::Updates];
 
     fn label(self) -> &'static str {
         match self {
             Tab::General => "General",
             Tab::Appearance => "Appearance",
+            Tab::Keyboard => "Keyboard",
             Tab::Updates => "Updates",
         }
     }
@@ -65,6 +68,7 @@ impl Tab {
         match self {
             Tab::General => FOLDER,
             Tab::Appearance => CONTRAST,
+            Tab::Keyboard => KEYBOARD,
             Tab::Updates => UPDATES,
         }
     }
@@ -150,7 +154,10 @@ impl Browser {
         self.lightbox = None;
         self.browse.dismiss_chooser(&self.library);
         self.settings_open = self.browse.chooser().is_none();
-        if let Some(tab) = tab {
+        if let Some(tab) = tab
+            && tab != self.settings_tab
+        {
+            self.stop_recording();
             self.settings_tab = tab;
         }
         cx.notify();
@@ -159,13 +166,18 @@ impl Browser {
 
     pub(super) fn close_settings(&mut self, cx: &mut Context<Self>) {
         self.end_strength_drag(cx);
+        self.stop_recording();
         self.settings_open = false;
         cx.notify();
     }
 
     /// The settings window and the shade behind it, which closes it when clicked. Below the
     /// header, which stays usable as the window's title bar.
-    pub(super) fn settings_window(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    pub(super) fn settings_window(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
         if !self.settings_open {
             return None;
         }
@@ -173,6 +185,7 @@ impl Browser {
         let body = match tab {
             Tab::General => self.general(cx),
             Tab::Appearance => self.appearance(cx),
+            Tab::Keyboard => self.keyboard(window, cx),
             Tab::Updates => self.updates(cx),
         };
         let card = div()
@@ -282,6 +295,7 @@ impl Browser {
                     d.child(div().size(px(7.)).rounded_full().bg(theme::bright()))
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    this.stop_recording();
                     this.settings_tab = tab;
                     cx.notify();
                 }))
