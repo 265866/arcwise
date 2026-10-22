@@ -285,8 +285,8 @@ impl Arcwise {
             )
     }
 
-    /// A toast at the bottom right about a version. Ones saying a version is available, ready or
-    /// installed fade away by themselves; one saying it did not install stays until dismissed.
+    /// A toast at the bottom right about a version. Ones saying a version is available or installed
+    /// fade away by themselves; one saying it did not install stays until dismissed.
     fn update_toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let toast = div()
             .absolute()
@@ -344,21 +344,6 @@ impl Arcwise {
                         }))
                 }));
                 fade_out(toast, "update-available-fade")
-            }
-            Toast::Ready(version) => {
-                let toast = row(
-                    toast,
-                    "update-ready",
-                    format!("Arcwise {version} installs when you close it"),
-                )
-                .child(
-                    ui::button("update-restart", "Restart now").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.updater.update(cx, |u, cx| u.install_now(cx));
-                        },
-                    )),
-                );
-                fade_out(toast, "update-ready-fade")
             }
             Toast::Updated(version) => {
                 let toast =

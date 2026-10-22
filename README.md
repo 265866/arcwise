@@ -103,17 +103,17 @@ was. If that monitor isn't connected, it opens in the middle of your main one.
 
 An installed Arcwise asks GitHub whether a newer release exists when it opens, and every hour
 while it stays open. With **Automatic updates** on in the settings' **Updates** tab, as they are
-at first, Arcwise downloads the new installer in the background, says it is ready, and installs it
-when you close Arcwise; **Restart now** installs it at once. Before that, it checks the
+at first, Arcwise downloads the new installer in the background and installs it when you close
+Arcwise; **Restart now** in that tab installs it at once. Before that, it checks the
 installer's attestation as `gh attestation verify` does, and that the release workflow built that
 exact installer on `main`. An installer that fails the check is deleted, and a message links to
 the releases page instead.
 
-With **Automatic updates** off, a message says a new version is available. Either way, a badge
-shows on the settings gear until the new version is installed, and the **Updates** tab shows the
-version you have and the new one, with a button that updates Arcwise and relaunches it. After an
-update, Arcwise says which version it is now. **Check now** asks GitHub at once, and
-**What's new** opens the list of releases.
+With **Automatic updates** off, a message says a new version is available when you open Arcwise.
+Either way, a badge shows on the settings gear until the new version is installed, and the
+**Updates** tab shows the version you have and the new one, with a button that updates Arcwise and
+relaunches it. After an update, Arcwise says which version it is now. **Check now** asks GitHub
+at once, and **What's new** opens the list of releases.
 
 An `arcwise.exe` run from the zip doesn't update itself. Get new versions from the
 [releases page](https://github.com/265866/arcwise/releases/latest).
