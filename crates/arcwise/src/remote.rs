@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions, TryLockError};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -591,8 +592,12 @@ fn get(url: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 /// Writes beside the target and renames into place, so a reader never sees half a file.
+/// Writes beside `path` under a name of its own, so two reloads saving one library at once don't
+/// rename each other's file away.
 fn write_whole(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let part = path.with_extension("json.part");
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let part = path.with_extension(format!("json.{}-{n}.part", std::process::id()));
     fs::write(&part, bytes).with_context(|| format!("writing {}", part.display()))?;
     fs::rename(&part, path).with_context(|| format!("saving {}", path.display()))
 }
