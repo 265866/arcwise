@@ -64,7 +64,8 @@ pub struct Update {
 pub enum Outcome {
     /// The installer is downloaded and verified.
     Ready(Update),
-    /// The installer could not be shown to come from the release workflow, so it was deleted.
+    /// The installer could not be shown to come from the release workflow, so it was deleted, or
+    /// the reason says why it couldn't be.
     Unverified {
         /// Why, and whether deleting it failed too.
         reason: String,
@@ -122,7 +123,8 @@ pub fn latest(current: &Version, dir: &Path) -> anyhow::Result<Check> {
 }
 
 /// Downloads `version`'s installer into `dir` and checks its attestation. Blocks on the network,
-/// so it runs off the UI thread. Anything but a verified installer is deleted.
+/// so it runs off the UI thread. Anything but a verified installer is deleted, or the outcome
+/// says why it couldn't be.
 ///
 /// # Errors
 ///
@@ -167,10 +169,10 @@ pub fn fetch(version: &Version, dir: &Path) -> anyhow::Result<Outcome> {
         Err(failed) => match fs::remove_file(&installer) {
             Ok(()) => Err(failed),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(failed),
-            Err(e) => Err(failed.context(format!(
-                "and deleting the partial download {} failed: {e}",
+            Err(e) => Err(anyhow::anyhow!(
+                "{failed:#}; deleting the partial download {} failed too: {e}",
                 installer.display()
-            ))),
+            )),
         },
     }
 }
