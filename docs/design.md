@@ -45,7 +45,8 @@ fetched) to `arcwise_video`, whose frames the player paces against the clip's cl
   allows that source and the crates gpui itself depends on.
 - **No code before `main()`.** gpui's `actions!` writes an `inventory::submit!` into the calling
   crate. Arcwise declares its actions with `#[derive(Action)]` and `#[action(no_register)]`
-  instead, and binds keys to the typed actions, which need no registration.
+  instead, and binds keys to the typed actions, which need no registration. `constructor_macros`
+  in `dylint.toml` stays empty, so `just dylint` fails an action that registers itself.
 - **Hardware video over a software decoder.** Media Foundation decodes on the GPU and converts to
   BGRA there, so a clip cost about an eighth of one CPU core while the game ran, as measured for
   0.10.0, which decodes the same way. Frames are read

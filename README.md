@@ -33,7 +33,7 @@ your option.
 Release builds include `THIRD-PARTY-LICENSES.html`, the licenses of the open-source crates
 Arcwise is built with.
 
-`just notices` writes the licenses of the crates it is built with to
+For a build from source, `just notices` writes the licenses of the crates it is built with to
 `target/THIRD-PARTY-LICENSES.html`.
 
 Arcwise isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
