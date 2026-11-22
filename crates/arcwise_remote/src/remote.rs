@@ -152,14 +152,41 @@ pub(crate) enum Fetched {
     Elsewhere,
 }
 
-/// Says what went wrong where nothing on screen does.
+/// Says what went wrong where nothing on screen does. The user's own folders are written as
+/// `%LOCALAPPDATA%` and `%USERPROFILE%`, so the line names no account.
 #[expect(
     clippy::print_stderr,
-    reason = "Arcwise keeps no log file, so a problem its window does not show goes to stderr, \
-              where a run from a terminal sees it"
+    reason = "Arcwise keeps no log file, so a problem its window does not show goes to stderr: a \
+              debug build's console, or wherever a release build's stderr is redirected"
 )]
-pub(crate) fn report(problem: Arguments<'_>) {
-    eprintln!("arcwise: {problem}");
+pub fn report(problem: Arguments<'_>) {
+    let folders: Vec<UserFolder> = ["LOCALAPPDATA", "USERPROFILE"]
+        .into_iter()
+        .filter_map(|variable| {
+            let path = env::var(variable).ok().filter(|path| !path.is_empty())?;
+            Some(UserFolder { variable, path })
+        })
+        .collect();
+    eprintln!(
+        "arcwise: {}",
+        without_user_folders(&problem.to_string(), &folders)
+    );
+}
+
+/// A folder of the user's, named by the environment variable that holds it.
+struct UserFolder {
+    variable: &'static str,
+    path: String,
+}
+
+/// `text` with each of `folders` written as its variable, the first listed first, so a folder
+/// inside another is replaced before the one it is in.
+fn without_user_folders(text: &str, folders: &[UserFolder]) -> String {
+    let mut text = text.to_owned();
+    for folder in folders {
+        text = text.replace(&folder.path, &format!("%{}%", folder.variable));
+    }
+    text
 }
 
 /// Whether a library location is a web address rather than a folder.
@@ -1030,6 +1057,38 @@ mod tests {
     }
 
     #[test]
+    fn a_report_names_the_users_folders_by_their_variables() {
+        let folders = [
+            UserFolder {
+                variable: "LOCALAPPDATA",
+                path: r"C:\Users\someone\AppData\Local".to_owned(),
+            },
+            UserFolder {
+                variable: "USERPROFILE",
+                path: r"C:\Users\someone".to_owned(),
+            },
+        ];
+        assert_eq!(
+            without_user_folders(
+                r"deleting C:\Users\someone\AppData\Local\Arcwise\libraries\x\lineups\1.mp4: denied",
+                &folders
+            ),
+            r"deleting %LOCALAPPDATA%\Arcwise\libraries\x\lineups\1.mp4: denied",
+            "the inner folder goes first, so its variable replaces it whole"
+        );
+        assert_eq!(
+            without_user_folders(r"creating C:\Users\someone\Desktop\lib", &folders),
+            r"creating %USERPROFILE%\Desktop\lib",
+            "a path elsewhere in the profile"
+        );
+        assert_eq!(
+            without_user_folders("https://library.arcwise.lol/library.json", &folders),
+            "https://library.arcwise.lol/library.json",
+            "nothing of the user's"
+        );
+    }
+
+    #[test]
     fn changed_and_removed_files_are_dropped() {
         let dir = folder("drop");
         fs::create_dir_all(dir.join("lineups")).unwrap();
@@ -1242,10 +1301,8 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
         assert_eq!(server.asked(), Vec::<String>::new(), "readied, not played");
         fetch_in_background(&path);
-        let until = Instant::now() + Duration::from_secs(5);
-        while !path.is_file() && Instant::now() < until {
-            thread::sleep(Duration::from_millis(20));
-        }
+        drop(Claim::wait(&path));
+        assert!(path.is_file(), "the background fetch saved the clip");
         assert_eq!(read(&path).unwrap(), b"clip");
         assert_eq!(server.asked(), ["lineups/1.mp4"]);
         assert_eq!(playable(&path), path);
