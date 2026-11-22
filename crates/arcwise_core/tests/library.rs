@@ -320,7 +320,7 @@ fn a_part_lists_its_maps_and_files() {
     let maps: Vec<_> = part
         .maps()
         .iter()
-        .map(|counted| (counted.map.name.as_str(), counted.lineups))
+        .map(|counted| (counted.map.name.as_str(), counted.lineup_count))
         .collect();
     assert_eq!(maps, [("Ascent (second)", 1), ("Haven", 2)]);
     let haven = part.files(Some(&[MapId::new("m-haven")]));

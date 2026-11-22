@@ -82,7 +82,7 @@ pub struct MapLineups<'library> {
     /// The map.
     pub map: &'library Map,
     /// How many lineups the library has on it.
-    pub lineups: usize,
+    pub lineup_count: usize,
 }
 
 impl Part {
@@ -163,9 +163,9 @@ impl Part {
             .iter()
             .map(|map| MapLineups {
                 map,
-                lineups: self.file.lineups.iter().filter(|l| l.map == map.id).count(),
+                lineup_count: self.file.lineups.iter().filter(|l| l.map == map.id).count(),
             })
-            .filter(|counted| counted.lineups > 0)
+            .filter(|counted| counted.lineup_count > 0)
             .collect()
     }
 
@@ -204,13 +204,6 @@ struct AbilityPlace {
     ability: usize,
 }
 
-/// One agent on one map, the key of the lineup counts.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct MapAgent {
-    map: MapId,
-    agent: AgentId,
-}
-
 /// The lineups of every library shown, merged: a map or an agent listed by several is shown once,
 /// and so is an ability of the same agent with the same name. The first library to list a lineup
 /// id gives the lineup; the same id later is skipped.
@@ -233,7 +226,8 @@ pub struct Library {
     agent_index: HashMap<AgentId, usize>,
     ability_index: HashMap<AbilityId, AbilityPlace>,
     lineup_index: HashMap<LineupId, usize>,
-    counts: HashMap<MapAgent, usize>,
+    /// Lineups per map, then per agent on it.
+    counts: HashMap<MapId, HashMap<AgentId, usize>>,
     /// Per library, by index into `roots`: its lineups left out for an id already taken.
     skipped: Vec<usize>,
 }
@@ -302,10 +296,9 @@ impl Library {
         for lineup in &library.lineups {
             *library
                 .counts
-                .entry(MapAgent {
-                    map: lineup.map.clone(),
-                    agent: lineup.agent.clone(),
-                })
+                .entry(lineup.map.clone())
+                .or_default()
+                .entry(lineup.agent.clone())
                 .or_default() += 1;
         }
         library
@@ -331,21 +324,19 @@ impl Library {
                 self.agents.len() - 1
             };
             for ability in abilities {
+                let own_id = ability.id;
                 let same = self.agents[a]
                     .abilities
                     .iter()
                     .find(|known| known.name.eq_ignore_ascii_case(&ability.name))
                     .map(|known| known.id);
                 let id = same.unwrap_or_else(|| {
-                    let id = self.free_ability_id(ability.id);
+                    let id = self.free_ability_id(own_id);
                     self.ability_root.insert(id, source);
-                    self.agents[a].abilities.push(Ability {
-                        id,
-                        ..ability.clone()
-                    });
+                    self.agents[a].abilities.push(Ability { id, ..ability });
                     id
                 });
-                merged_ability_ids.insert(ability.id, id);
+                merged_ability_ids.insert(own_id, id);
             }
         }
         for mut lineup in file.lineups {
@@ -447,10 +438,8 @@ impl Library {
     #[must_use]
     pub fn count(&self, map: &MapId, agent: &AgentId) -> usize {
         self.counts
-            .get(&MapAgent {
-                map: map.clone(),
-                agent: agent.clone(),
-            })
+            .get(map)
+            .and_then(|agents| agents.get(agent))
             .copied()
             .unwrap_or(0)
     }

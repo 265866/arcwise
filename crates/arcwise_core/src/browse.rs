@@ -97,8 +97,9 @@ pub struct Browse {
 }
 
 impl Browse {
-    /// Starts where `start` says, keeping only what the library has. Opens the map chooser, or
-    /// the agent chooser when only the map is known, unless there is something to show.
+    /// Starts where `start` says, keeping only what the library has. Unless the chosen agent has
+    /// lineups on the chosen map, opens a chooser: the agent chooser when a map is chosen, and
+    /// the map chooser otherwise.
     #[must_use]
     pub fn new(library: &Library, start: Start) -> Self {
         let mut browse = Browse {
@@ -239,8 +240,8 @@ impl Browse {
         }
     }
 
-    /// Shows `map`. Keeps the agent when the agent has lineups there, and otherwise opens the
-    /// agent chooser.
+    /// Shows `map`, keeping the chosen agent. Closes the chooser when that agent has lineups
+    /// there, and otherwise opens the agent chooser.
     pub fn choose_map(&mut self, library: &Library, map: MapId) {
         if self.map.as_ref() != Some(&map) {
             self.ability = None;

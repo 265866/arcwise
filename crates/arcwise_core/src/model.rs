@@ -90,13 +90,13 @@ pub struct Map {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    /// Takes fights first.
+    /// Listed first in the agent chooser.
     Duelist,
-    /// Gathers information and sets up fights.
+    /// Listed second in the agent chooser.
     Initiator,
-    /// Blocks sight lines with smokes.
+    /// Listed third in the agent chooser.
     Controller,
-    /// Holds ground and watches flanks.
+    /// Listed last in the agent chooser.
     Sentinel,
 }
 
@@ -168,9 +168,9 @@ pub struct Ability {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
-    /// The side that plants the spike.
+    /// Written `attack`.
     Attack,
-    /// The side that defuses it.
+    /// Written `defense`.
     Defense,
 }
 
@@ -250,9 +250,9 @@ impl Spot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tag {
-    /// One of the few lineups worth learning first.
+    /// The library's `essential` tag, shown as a badge.
     Essential,
-    /// One professional players use.
+    /// The library's `pro` tag, shown as a badge.
     Pro,
     /// A tag this version of Arcwise doesn't know, which it ignores.
     #[serde(other)]
@@ -396,7 +396,7 @@ pub struct Lineup {
     pub ability: AbilityId,
     /// The side of the round it is for.
     pub side: Side,
-    /// The lineup's name, as the list shows it.
+    /// The lineup's name, the heading of its panel.
     pub title: String,
     /// The library's labels for it.
     #[serde(default)]
