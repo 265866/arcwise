@@ -1,0 +1,52 @@
+{
+  "library": "D:\\lineups",
+  "libraries": [
+    {
+      "location": "https://library.example.invalid/",
+      "on": false,
+      "keep": [
+        "m-ascent"
+      ]
+    },
+    {
+      "location": "https://other.example.invalid/",
+      "on": true,
+      "keep_all": true
+    },
+    {
+      "location": "D:\\lineups",
+      "on": true
+    }
+  ],
+  "last": {
+    "map": "m-ascent",
+    "agent": "a-sova",
+    "side": "defense"
+  },
+  "blur": false,
+  "blur_strength": 30,
+  "auto_update": false,
+  "theme": "light",
+  "follow_system_theme": true,
+  "reopen_last": false,
+  "start_speed": "quarter",
+  "custom_title_bar": false,
+  "window": {
+    "x": -1200.0,
+    "y": 40.5,
+    "width": 1300.0,
+    "height": 820.25,
+    "maximized": true,
+    "monitor": "a1b2c3d4-0000-0000-0000-000000000002"
+  },
+  "version": "0.6.0",
+  "shortcuts": {
+    "next_agent": [
+      "alt-n",
+      "f2"
+    ],
+    "restart_clip": [
+      "ctrl-r"
+    ]
+  }
+}

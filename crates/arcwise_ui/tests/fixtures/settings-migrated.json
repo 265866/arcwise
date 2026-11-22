@@ -1,0 +1,21 @@
+{
+  "library": "D:\\lineups",
+  "last": null,
+  "blur": false,
+  "blur_strength": 30,
+  "auto_update": true,
+  "theme": "light",
+  "follow_system_theme": false,
+  "reopen_last": true,
+  "start_speed": "full",
+  "custom_title_bar": true,
+  "window": {
+    "x": 10.0,
+    "y": 20.0,
+    "width": 1200.0,
+    "height": 800.0,
+    "maximized": false,
+    "monitor": null
+  },
+  "version": null
+}
