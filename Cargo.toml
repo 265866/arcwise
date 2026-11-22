@@ -42,11 +42,9 @@ readme_sections = ["Install", "Documentation", "License"]
 [workspace.metadata.policy.internal_dependencies]
 arcwise_core = []
 arcwise_ffi = []
-arcwise_video = []
 arcwise_remote = [
     "arcwise_core",
 ]
-arcwise_update = []
 arcwise_ui = [
     "arcwise_core",
     "arcwise_ffi",
@@ -54,6 +52,8 @@ arcwise_ui = [
     "arcwise_update",
     "arcwise_video",
 ]
+arcwise_update = []
+arcwise_video = []
 arcwise = [
     "arcwise_core",
     "arcwise_ui",

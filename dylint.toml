@@ -4,10 +4,11 @@
 # Crates allowed to contain unsafe code (`unsafe_outside_unsafe_crate`). Keep unsafe code in a crate
 # of its own and list it here.
 unsafe_crates = [
+    # Safe wrappers over the Win32 window, theme, keyboard and mutex calls, and libwebp's decoder
+    # with the encoder that warms it up: C and Win32 APIs with no safe binding.
+    "arcwise_ffi",
     # Hardware video decoding through Windows Media Foundation, a COM API with no safe binding.
     "arcwise_video",
-    # Safe wrappers over the Win32 window, theme and mutex calls and libwebp's decoder.
-    "arcwise_ffi",
 ]
 # Type names that may be written with their module, such as `io::Error` (`qualified_type_path`).
 ambiguous_type_names = ["Error", "Result"]
