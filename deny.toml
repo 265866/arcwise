@@ -26,10 +26,19 @@ allow-wildcard-paths = true
 [[bans.deny]]
 crate = "ctor"
 reason = "Google Rust Style Guide: don't run code before main()"
+# gpui depends on it and re-exports its attribute; arcwise never uses it. `cargo tree -i ctor`
+# shows gpui as the only crate that depends on it. Any other path stays banned.
+wrappers = ["gpui"]
 
 [[bans.deny]]
 crate = "inventory"
 reason = "Google Rust Style Guide: don't run code before main()"
+# gpui collects the actions its `#[derive(Action)]` registers with it, and that derive writes the
+# registration into the caller's crate. So arcwise must declare its actions with
+# `#[action(no_register)]` and must not use gpui's `actions!` or `register_action!`; cargo-deny
+# can't check that, since arcwise reaches inventory only through gpui's re-export. `cargo tree -i
+# inventory` shows gpui as the only crate that depends on it. Any other path stays banned.
+wrappers = ["gpui"]
 
 [[bans.deny]]
 crate = "linkme"
@@ -38,6 +47,10 @@ reason = "Google Rust Style Guide: don't run code before main()"
 [[bans.deny]]
 crate = "paste"
 reason = "builds identifiers and attributes the custom lints can't read"
+# gpui and gpui_windows turn on image's `exr` feature, which Zed's workspace dependency lists, and
+# exr brings in pulp -> paste; `cargo tree -i paste` shows pulp as the only crate that depends on
+# it. No arcwise code expands it. Any other path stays banned.
+wrappers = ["pulp"]
 
 [[bans.deny]]
 crate = "pastey"
@@ -46,3 +59,12 @@ reason = "builds identifiers and attributes the custom lints can't read"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# gpui comes from Zed's repository, pinned to one commit in Cargo.toml's `rev`, since its crates.io
+# release lags that tree under the same version number. Zed's workspace patches async-task with its
+# own fork, and gpui is only tested against it, so arcwise patches it in too, at the `rev` Zed's
+# workspace pins. Zed also patches async-process, which isn't in the Windows graph, so it isn't
+# allowed here.
+allow-git = [
+    "https://github.com/zed-industries/zed",
+    "https://github.com/zed-industries/async-task.git",
+]
