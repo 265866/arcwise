@@ -7,9 +7,9 @@ A desktop lineup browser for Valorant.
 
 ## Install
 
-Download the files for your platform from the
-[latest release](https://github.com/265866/arcwise/releases/latest), check them
-as [Verify a release](docs/verifying-releases.md) shows, and install them.
+Download the file you want for your platform from the
+[latest release](https://github.com/265866/arcwise/releases/latest), check it
+as [Verify a release](docs/verifying-releases.md) shows, and install it.
 [Install](docs/install.md) has the details.
 
 ## Documentation
@@ -20,7 +20,7 @@ as [Verify a release](docs/verifying-releases.md) shows, and install them.
 - [Verify a release](docs/verifying-releases.md): check that a download came from this repository.
 - [Design](docs/design.md): the goals, the architecture, and the decisions behind them.
 - [Stability](docs/stability.md): what a release can change, and what to read before you upgrade.
-- [Code style](docs/style.md): which style rules a tool checks, and the review checklist for the rest.
+- [Code style](docs/style.md): the style rules a tool checks, and the review checklist for the rest.
 - [Contributing](CONTRIBUTING.md): set up, run the checks, and send a change.
 - [Maintain](docs/maintaining.md): the owner's repository settings, releases and trellis updates.
 - [Security policy](SECURITY.md): how to report a vulnerability.
@@ -32,6 +32,9 @@ Released under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0]
 your option.
 Release builds include `THIRD-PARTY-LICENSES.html`, the licenses of the open-source crates
 Arcwise is built with.
+
+`just notices` writes the licenses of the crates it is built with to
+`target/THIRD-PARTY-LICENSES.html`.
 
 Arcwise isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
 anyone officially involved in producing or managing Riot Games properties. Riot Games, and all
