@@ -2,7 +2,7 @@
 //! texture, about 27 MB of GPU memory once any path is drawn; a picture of the lines costs only
 //! its own size, and is drawn again only when the lines change.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use gpui::{App, Bounds, Corners, Hsla, Pixels, Point, RenderImage, Rgba, Size, Window};
@@ -49,14 +49,19 @@ struct Picture {
 #[derive(Debug, Default)]
 pub(crate) struct Drawn {
     last: RefCell<Option<Picture>>,
+    /// Whether painting failed since the picture was last drawn. The canvas repaints every frame
+    /// while a clip plays, so a failure that lasts is passed on once per picture, not per frame.
+    failed: Cell<bool>,
 }
 
 impl Drawn {
     /// Paints `lines` over `bounds`, drawing them into a new picture if they or the size changed.
+    /// When freeing the previous picture fails, the new one is still drawn and painted.
     ///
     /// # Errors
     ///
-    /// GPUI's error when the window can't take the picture into its sprite atlas.
+    /// GPUI's error when the window can't free the previous picture or take this one into its
+    /// sprite atlas: once per picture, as [`Drawn::once`] passes it on.
     pub(crate) fn paint(
         &self,
         bounds: Bounds<Pixels>,
@@ -73,25 +78,24 @@ impl Drawn {
         let unchanged = last
             .as_ref()
             .is_some_and(|p| p.size == bounds.size && p.scale == scale && p.lines == lines);
+        let mut freed = Ok(());
         if !unchanged {
+            self.failed.set(false);
             if let Some(old) = last.take() {
-                window.drop_image(old.image)?;
+                freed = window.drop_image(old.image);
             }
-            let Some(area) = area(&lines, bounds.size, scale) else {
-                return Ok(());
-            };
-            let Some(image) = draw(&lines, area.from, area.size, scale) else {
-                return Ok(());
-            };
-            *last = Some(Picture {
-                lines,
-                size: bounds.size,
-                scale,
-                area: area.bounds,
-                image,
+            *last = area(&lines, bounds.size, scale).and_then(|area| {
+                let image = draw(&lines, area.from, area.size, scale)?;
+                Some(Picture {
+                    lines,
+                    size: bounds.size,
+                    scale,
+                    area: area.bounds,
+                    image,
+                })
             });
         }
-        if let Some(picture) = last.as_ref() {
+        let painted = last.as_ref().map_or(Ok(()), |picture| {
             let at = Bounds::new(bounds.origin + picture.area.origin, picture.area.size);
             window.paint_image(
                 bounds,
@@ -100,9 +104,23 @@ impl Drawn {
                 picture.image.clone(),
                 0,
                 false,
-            )?;
+            )
+        });
+        drop(last);
+        self.once(freed.and(painted))
+    }
+
+    /// Passes on `result`'s error only if no painting failed since the picture was last drawn,
+    /// for what a canvas paints beside the picture too.
+    ///
+    /// # Errors
+    ///
+    /// `result`'s error, the first time since the picture was last drawn.
+    pub(crate) fn once(&self, result: anyhow::Result<()>) -> anyhow::Result<()> {
+        match result {
+            Err(_) if self.failed.replace(true) => Ok(()),
+            result => result,
         }
-        Ok(())
     }
 
     /// Frees the picture, before the owner is dropped. Call outside any window's update.

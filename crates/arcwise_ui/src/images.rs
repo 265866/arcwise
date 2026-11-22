@@ -277,7 +277,7 @@ impl Images {
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "the budget is 128 MB scaled by 1 to 4, exact in an f64 and far inside a usize"
+        reason = "the budget is 128 MB scaled by 1 to 4, a whole number of bytes well inside a usize once truncated"
     )]
     pub(crate) fn fit_rows(&mut self, rows: u32) {
         let scale = (f64::from(rows) / f64::from(BUDGET_ROWS))

@@ -200,7 +200,9 @@ impl EventEmitter<SetStartSpeed> for BrowserView {}
 impl EventEmitter<Relaunch> for BrowserView {}
 
 impl BrowserView {
-    /// A browser over `library`, opening at `start`, with `pictures` already decoded for it.
+    /// A browser over `library`, opening at `start`, with `pictures` already decoded for it. Every
+    /// agent's portrait starts loading at once, so the agent step of the first-run dialog opens
+    /// with them while the map is still being picked.
     pub(crate) fn new(
         library: Library,
         start: Start,

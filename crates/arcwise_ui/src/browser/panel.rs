@@ -312,7 +312,7 @@ impl BrowserView {
                 } else {
                     Ok(())
                 };
-                if let Err(e) = painted {
+                if let Err(e) = drawn.once(painted) {
                     remote::report(format_args!("drawing the map around a stand spot: {e:#}"));
                 }
                 let line = Line {

@@ -12,6 +12,8 @@ use std::io::{self, BufWriter};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+use arcwise_remote::remote;
+
 /// An input that never settles is given up on after this long.
 const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -35,17 +37,14 @@ struct Pending {
 static TRACE: OnceLock<Option<Mutex<Trace>>> = OnceLock::new();
 
 /// Opens the trace file, if one is asked for, and starts timing the launch.
-#[expect(
-    clippy::print_stderr,
-    reason = "tracing is for a developer who starts Arcwise from a terminal, where stderr is \
-              where they look when the trace file can't be created"
-)]
 pub(crate) fn init() {
     let epoch = Instant::now();
     let trace = TRACE.get_or_init(|| {
         let path = env::var_os("ARCWISE_TRACE")?;
         let file = File::create(&path)
-            .inspect_err(|e| eprintln!("arcwise: cannot write {}: {e}", path.to_string_lossy()))
+            .inspect_err(|e| {
+                remote::report(format_args!("cannot write {}: {e}", path.to_string_lossy()));
+            })
             .ok()?;
         Some(Mutex::new(Trace {
             out: BufWriter::new(file),
@@ -66,10 +65,11 @@ fn lock() -> Option<MutexGuard<'static, Trace>> {
     (!trace.failed).then_some(trace)
 }
 
-/// Whether a trace is being written.
+/// Whether a trace is being written: one was asked for, and it hasn't stopped on a failed write
+/// or a panic while another thread held it. The keystroke and frame hooks run only while it is.
 #[must_use]
 pub(crate) fn enabled() -> bool {
-    TRACE.get().is_some_and(Option::is_some)
+    lock().is_some()
 }
 
 fn ms(d: Duration) -> f64 {
@@ -99,14 +99,9 @@ impl Trace {
     }
 
     /// Reports the first failure to write the trace, and stops it.
-    #[expect(
-        clippy::print_stderr,
-        reason = "tracing is for a developer who starts Arcwise from a terminal, where stderr is \
-                  where they look when the trace file stops taking lines"
-    )]
     fn check(&mut self, written: io::Result<()>) {
         if let Err(e) = written {
-            eprintln!("arcwise: cannot write the trace: {e}");
+            remote::report(format_args!("cannot write the trace: {e}"));
             self.failed = true;
         }
     }
