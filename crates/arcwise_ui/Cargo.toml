@@ -1,0 +1,27 @@
+[package]
+name = "arcwise_ui"
+description = "Arcwise's window: the GPUI views, theme and drawing behind its screens"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+arcwise_core = { path = "../arcwise_core" }
+arcwise_ffi = { path = "../arcwise_ffi" }
+arcwise_remote = { path = "../arcwise_remote" }
+arcwise_update = { path = "../arcwise_update" }
+arcwise_video = { path = "../arcwise_video" }
+gpui.workspace = true
+gpui_platform.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+resvg = { version = "0.46", default-features = false }
+semver = "1"
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

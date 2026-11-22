@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 arcwise_core = { path = "../arcwise_core" }
+arcwise_ui = { path = "../arcwise_ui" }
 
 [build-dependencies]
 winresource = "0.1"

@@ -153,14 +153,15 @@ pub(crate) enum Fetched {
 }
 
 /// Says what went wrong where nothing on screen does. The user's own folders are written as
-/// `%LOCALAPPDATA%` and `%USERPROFILE%`, so the line names no account.
+/// `%LOCALAPPDATA%`, `%APPDATA%` and `%USERPROFILE%`, so the line names no account, even where
+/// a roaming `%APPDATA%` lives on a network share.
 #[expect(
     clippy::print_stderr,
     reason = "Arcwise keeps no log file, so a problem its window does not show goes to stderr: a \
               debug build's console, or wherever a release build's stderr is redirected"
 )]
 pub fn report(problem: Arguments<'_>) {
-    let folders: Vec<UserFolder> = ["LOCALAPPDATA", "USERPROFILE"]
+    let folders: Vec<UserFolder> = ["LOCALAPPDATA", "APPDATA", "USERPROFILE"]
         .into_iter()
         .filter_map(|variable| {
             let path = env::var(variable).ok().filter(|path| !path.is_empty())?;
@@ -1064,10 +1065,22 @@ mod tests {
                 path: r"C:\Users\someone\AppData\Local".to_owned(),
             },
             UserFolder {
+                variable: "APPDATA",
+                path: r"\\server\profiles\someone\AppData\Roaming".to_owned(),
+            },
+            UserFolder {
                 variable: "USERPROFILE",
                 path: r"C:\Users\someone".to_owned(),
             },
         ];
+        assert_eq!(
+            without_user_folders(
+                r"reading \\server\profiles\someone\AppData\Roaming\Arcwise\settings.json: denied",
+                &folders
+            ),
+            r"reading %APPDATA%\Arcwise\settings.json: denied",
+            "a roaming settings folder on a network share"
+        );
         assert_eq!(
             without_user_folders(
                 r"deleting C:\Users\someone\AppData\Local\Arcwise\libraries\x\lineups\1.mp4: denied",
