@@ -1,6 +1,17 @@
-//! The logic behind `arcwise`, apart from its binary so the binary's command-line and
-//! runtime dependencies stay out of it.
+//! The lineup library Arcwise browses and the selection logic behind its screens, kept free of any
+//! UI so it can be tested on its own.
 
+mod browse;
+mod landing;
+mod library;
+mod model;
 mod version_line;
 
+pub use browse::{Browse, Chooser, Direction, Start, View};
+pub use landing::{CLUSTER_RADIUS, Landing, LandingKey, Tally, cluster};
+pub use library::{FORMAT, Library, LoadError, MapLineups, Part};
+pub use model::{
+    Ability, AbilityId, Agent, AgentId, Bolt, Bounces, Charge, Lineup, LineupId, Map, MapId, Point,
+    Rgb, Role, Side, Spot, Steps, Tag,
+};
 pub use version_line::version_line;
