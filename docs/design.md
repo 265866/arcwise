@@ -16,7 +16,8 @@ beside the game, never an overlay on it. It must:
 - reopen where it was left, and keep its settings across updates;
 - update itself only to an installer this repository's release workflow built.
 
-This repository replaced arcwise-old at version 0.11.0. Its settings file, data folders, installer
+This repository replaced an earlier one of the same name (GitHub's number for it is 1426430645),
+from version 0.11.0. Its settings file, data folders, installer
 and release file names stay those of 0.10.0, so an existing install upgrades in place.
 
 ## Architecture
@@ -46,7 +47,8 @@ fetched) to `arcwise_video`, whose frames the player paces against the clip's cl
   crate. Arcwise declares its actions with `#[derive(Action)]` and `#[action(no_register)]`
   instead, and binds keys to the typed actions, which need no registration.
 - **Hardware video over a software decoder.** Media Foundation decodes on the GPU and converts to
-  BGRA there, so a clip costs about an eighth of one CPU core while the game runs. Frames are read
+  BGRA there, so a clip cost about an eighth of one CPU core while the game ran, as measured for
+  0.10.0, which decodes the same way. Frames are read
   back into memory, since GPUI can't sample a texture from another Direct3D device.
 - **Pictures through libwebp.** The library's stills decode about three times faster with libwebp
   than with the `image` crate's decoder. libwebp fills its decoding tables on first use without a

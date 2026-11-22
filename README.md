@@ -15,7 +15,7 @@ as [Verify a release](docs/verifying-releases.md) shows, and install them.
 ## Documentation
 
 - [Install](docs/install.md): every way to install and update it.
-- [Use Arcwise](docs/using.md): what it does, its keys and settings, and how it updates itself.
+- [Use Arcwise](docs/using.md): install it on Windows, what it does, its keys and settings, and how it updates itself.
 - [Libraries](docs/library-format.md): how Arcwise reads, merges and mirrors lineup libraries.
 - [Verify a release](docs/verifying-releases.md): check that a download came from this repository.
 - [Design](docs/design.md): the goals, the architecture, and the decisions behind them.
@@ -30,6 +30,8 @@ as [Verify a release](docs/verifying-releases.md) shows, and install them.
 
 Released under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at
 your option.
+Release builds include `THIRD-PARTY-LICENSES.html`, the licenses of the open-source crates
+Arcwise is built with.
 
 Arcwise isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
 anyone officially involved in producing or managing Riot Games properties. Riot Games, and all

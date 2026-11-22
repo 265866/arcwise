@@ -1,8 +1,10 @@
 # Use Arcwise
 
-Arcwise is a desktop lineup browser for Valorant. Pick a map and an agent, see where each piece of
-utility lands, and watch exactly where to stand, where to aim and how to throw. It is a separate
-window, not an overlay: keep it on a second monitor while you play.
+Read this page to install Arcwise on Windows and get the most from it: what it shows, its keys and
+settings, how its libraries and updates work, and what it needs. Arcwise is a desktop lineup
+browser for Valorant. Pick a map and an agent, see where each piece of utility lands, and watch
+exactly where to stand, where to aim and how to throw. It is a separate window, not an overlay:
+keep it on a second monitor while you play.
 
 ![Choosing a map](screenshots/choose-map.png)
 
@@ -35,7 +37,8 @@ The uninstaller asks whether to delete your settings too.
   around the stand spot, the crosshair at the throw, and where it lands. A note over the clip says
   when the throw is more than a plain click, such as a jump throw.
 - **Hardware video.** Clips decode on the GPU through Windows Media Foundation and play at full
-  frame rate even while another window has focus, at about an eighth of one CPU core.
+  frame rate even while another window has focus, at about an eighth of one CPU core (as
+  measured for Arcwise 0.10.0, which decodes the same way).
 
 ![Choosing an agent](screenshots/choose-agent.png)
 
@@ -78,7 +81,7 @@ Without a connection, Arcwise shows a library on the web as it was last fetched.
 format and publishes a library to the web; [Libraries](library-format.md) says what Arcwise does
 with one.
 
-## Appearance
+## Appearance, playback and the window
 
 The settings' **Appearance** tab switches between the dark theme, which Arcwise starts with, a
 light one, and **System**, which follows Windows' light or dark mode as it changes. It also turns
@@ -119,8 +122,11 @@ GitHub sees your IP address, as it does for any visit. Arcwise downloads an inst
 attestation only to install a newer version.
 
 Arcwise 0.10.0 and earlier trust only the repository they were released from, which this one
-replaces, so they can't update themselves to a release from here. Install a release from here
-once by hand, over the old one; it keeps your settings, and updates itself from then on.
+replaces, so they can't update themselves to a release from here. When one finds a newer release,
+it says "Its download could not be verified. Get it from the releases page instead." That is
+expected, and no sign of a tampered download: install the release from the
+[releases page](https://github.com/265866/arcwise/releases/latest) once by hand, over the old one.
+It keeps your settings, and updates itself from then on.
 
 ## Requirements
 
@@ -131,7 +137,8 @@ once by hand, over the old one; it keeps your settings, and updates itself from 
 ## Command line
 
 `arcwise [--library DIR] [--map NAME] [--agent NAME] [--side attack|defense] [--lineup ID]
-[--view clip|stand|aim|lands]` opens on that library, map, agent, side, lineup and view. An
-argument Arcwise doesn't know opens the window with the error. `arcwise --version` prints the
+[--view clip|stand|aim|lands]` opens on that library, map, agent, side, lineup and view. A
+command line Arcwise can't read, such as an unknown flag or `--side up`, opens the window with the
+error. `arcwise --version` prints the
 version and exits; from a console, pipe or redirect it, such as `arcwise --version | more`, since
 Arcwise is a windowed program and has no console of its own.

@@ -1,6 +1,7 @@
 # Libraries
 
-A library is a folder of lineups: `library.json`, `manifest.json`, and the clips and pictures
+Read this page to know where Arcwise finds its lineups and what it keeps of them on disk. A library
+is a folder of lineups: `library.json`, `manifest.json`, and the clips and pictures
 beside them. The format, and a tool that checks a library and publishes it to the web, are in the
 [arcwise-library](https://github.com/265866/arcwise-library) repository:
 [docs/format.md](https://github.com/265866/arcwise-library/blob/main/docs/format.md).
@@ -20,7 +21,7 @@ https://library.arcwise.lol/.
   Arcwise fetches its `library.json` and `manifest.json` each time it reads the libraries, and
   drops its copies of files whose SHA-256 the manifest says changed. A picture is fetched into
   the mirror when first shown. A clip streams from the web while it is fetched into the mirror,
-  and plays from the mirror after. Each file is asked for at `<path>?v=<hash>` and checked against
+  and plays from the mirror after. Each file is asked for at `<path>?v=<the first 16 hex digits of its SHA-256>` and checked against
   the manifest once fetched. A file the manifest does not list is not asked for.
 - Without a connection, or when what the web sends is not a library or a manifest, a library on
   the web shows as it was last fetched, and whatever is in its mirror plays.
