@@ -312,9 +312,6 @@ impl BrowserView {
                 } else {
                     Ok(())
                 };
-                if let Err(e) = drawn.once(painted) {
-                    remote::report(format_args!("drawing the map around a stand spot: {e:#}"));
-                }
                 let line = Line {
                     points: throw
                         .iter()
@@ -329,6 +326,9 @@ impl BrowserView {
                 };
                 if let Err(e) = drawn.paint(bounds, vec![line], window) {
                     remote::report(format_args!("drawing a throw from its stand spot: {e:#}"));
+                }
+                if let Err(e) = drawn.once(painted) {
+                    remote::report(format_args!("drawing the map around a stand spot: {e:#}"));
                 }
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
                     let r = bounds.size.width * 0.022;

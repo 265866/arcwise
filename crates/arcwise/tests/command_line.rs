@@ -32,7 +32,7 @@ fn run(arguments: &[&str], home: &Path) -> Output {
         output.expect("the binary's output should be read")
     } else {
         let killed = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output();
         panic!(
             "`arcwise {arguments:?}` was still running after {PATIENCE:?}, so it was killed: {killed:?}"

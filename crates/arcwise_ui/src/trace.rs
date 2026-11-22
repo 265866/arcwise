@@ -66,7 +66,8 @@ fn lock() -> Option<MutexGuard<'static, Trace>> {
 }
 
 /// Whether a trace is being written: one was asked for, and it hasn't stopped on a failed write
-/// or a panic while another thread held it. The keystroke and frame hooks run only while it is.
+/// or a panic while another thread held it. The frame hook is added only while it is, and the
+/// keystroke hook, added at launch, returns at once after it stops.
 #[must_use]
 pub(crate) fn enabled() -> bool {
     lock().is_some()
