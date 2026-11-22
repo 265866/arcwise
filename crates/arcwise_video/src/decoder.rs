@@ -89,13 +89,14 @@ impl Decoder {
     }
 
     /// Hands `command` to the decode thread.
+    ///
+    /// # Panics
+    ///
+    /// When the decode thread has gone. It ends only once this handle is dropped, so that means
+    /// it panicked.
     fn send(&self, command: Command) {
-        #[expect(
-            let_underscore_drop,
-            clippy::let_underscore_must_use,
-            reason = "sending fails only once the decode thread has gone, which while this \
-                      handle lives means it panicked, and then no one is left to tell"
-        )]
-        let _ = self.commands.send(command);
+        self.commands
+            .send(command)
+            .expect("the decode thread runs as long as its handle");
     }
 }
