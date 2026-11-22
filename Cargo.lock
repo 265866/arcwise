@@ -133,7 +133,7 @@ checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
 
 [[package]]
 name = "arcwise"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "arcwise_core",
  "arcwise_ui",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "arcwise_core"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "arcwise_ffi"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "libwebp-sys",
  "raw-window-handle",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "arcwise_remote"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "arcwise_core",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "arcwise_ui"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "arcwise_core",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "arcwise_update"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "rustls",
@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "arcwise_video"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "crossbeam-channel",
  "windows 0.62.2",
