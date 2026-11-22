@@ -50,10 +50,6 @@ reason = "Google Rust Style Guide: don't run code before main()"
 [[bans.deny]]
 crate = "paste"
 reason = "builds identifiers and attributes the custom lints can't read"
-# gpui and gpui_windows turn on image's `exr` feature, which Zed's workspace dependency lists, and
-# exr brings in pulp -> paste; `cargo tree -i paste` shows pulp as the only crate that depends on
-# it. No arcwise code expands it. Any other path stays banned.
-wrappers = ["pulp"]
 
 [[bans.deny]]
 crate = "pastey"
