@@ -41,8 +41,22 @@ readme_sections = ["Install", "Documentation", "License"]
 # crates, is a rule change.
 [workspace.metadata.policy.internal_dependencies]
 arcwise_core = []
+arcwise_ffi = []
+arcwise_remote = [
+    "arcwise_core",
+]
+arcwise_ui = [
+    "arcwise_core",
+    "arcwise_ffi",
+    "arcwise_remote",
+    "arcwise_update",
+    "arcwise_video",
+]
+arcwise_update = []
+arcwise_video = []
 arcwise = [
     "arcwise_core",
+    "arcwise_ui",
 ]
 
 [workspace.package]

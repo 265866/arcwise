@@ -16,7 +16,12 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 | Path | Holds |
 | --- | --- |
 | `crates/arcwise` | The program: `main.rs` starts it and wires the parts together. No logic that a test would want to call. `arcwise --version` prints the version line and exits 0. `tests/command_line.rs` runs the built binary and checks it. |
-| `crates/arcwise_core` | The logic. A crate of its own keeps the binary's command-line and runtime dependencies out of it, lets `just docs` check the doc comments of both crates, and gives `internal_dependencies` its first edge: the binary depends on the logic, never the reverse. |
+| `crates/arcwise_core` | The logic with no I/O beyond reading a library: the `library.json` model, checking and merging libraries, landings, the browse state behind the choosers and filters, and the command-line parser. A crate of its own keeps the UI and network dependencies out of it, and gives `internal_dependencies` its first edges: the binary, the UI and the remote crate depend on it, never the reverse. |
+| `crates/arcwise_ffi` | Safe wrappers over the other foreign calls the app makes: the Win32 window, theme, keyboard and mutex calls, and libwebp's decoder, with the encoder it warms the decoder up with. It holds unsafe code, so `dylint.toml` lists it in `unsafe_crates`, and keeps it out of the binary and the UI. |
+| `crates/arcwise_remote` | Libraries on the web: the folder that mirrors each one in `%LOCALAPPDATA%\Arcwise\libraries`, fetching only what changed; offline copies of a library's maps, downloaded and deleted map by map; and reading the list of libraries shown, from folders and mirrors, into parts for `arcwise_core` to merge. |
+| `crates/arcwise_ui` | The window and everything in it, on GPUI: the startup the binary hands over to (the running mutex, the theme, the title bar, the window and its place), the choosers, the map, the lineup panel and player, the settings window, the settings file, themes, pictures, keyboard shortcuts, and when to check for updates. `crates/arcwise` only starts it. |
+| `crates/arcwise_update` | Updates: asking GitHub for the latest release, downloading its installer, and checking its attestation, which shows that this repository's release workflow built it. Its Sigstore dependency stays out of every other crate. |
+| `crates/arcwise_video` | Hardware video decoding through Windows Media Foundation: a decoder thread that opens a clip and sends frames as BGRA pixels. It holds unsafe code, so `dylint.toml` lists it in `unsafe_crates`. |
 
 Add a row for each crate you add, in the same pull request as the rule change that allows it.
 
