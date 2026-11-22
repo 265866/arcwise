@@ -1,0 +1,19 @@
+[package]
+name = "arcwise"
+description = "A desktop lineup browser for Valorant."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "arcwise"
+path = "src/main.rs"
+
+[dependencies]
+arcwise_core = { path = "../arcwise_core" }
+
+[lints]
+workspace = true
