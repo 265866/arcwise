@@ -15,6 +15,12 @@ use crate::frame::Frame;
 const AHEAD: usize = 3;
 
 /// A handle to the decode thread. Dropping it ends the thread.
+///
+/// # Panics
+///
+/// [`open`](Decoder::open), [`prepare`](Decoder::prepare), [`seek`](Decoder::seek) and
+/// [`stop`](Decoder::stop) panic when the decode thread has gone, which before this handle is
+/// dropped means it panicked.
 #[derive(Debug)]
 pub struct Decoder {
     commands: Sender<Command>,

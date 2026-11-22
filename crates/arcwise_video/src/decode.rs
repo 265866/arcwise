@@ -82,13 +82,10 @@ pub(crate) fn run(commands: Receiver<Command>, frames: &Sender<Frame>, events: &
         // SAFETY: balances the successful startup above; nothing of Media Foundation's is alive
         // any more.
         let shutdown = unsafe { MediaFoundation::MFShutdown() };
-        #[expect(
-            let_underscore_drop,
-            clippy::let_underscore_must_use,
-            reason = "the thread is ending, so a failed shutdown has nothing left to undo and no \
-                      one to report to"
-        )]
-        let _ = shutdown;
+        debug_assert!(
+            shutdown.is_ok(),
+            "Media Foundation shuts down once for its one startup: {shutdown:?}"
+        );
     }
     if com.is_ok() {
         // SAFETY: balances the successful COM initialization above, after Media Foundation shut
@@ -419,13 +416,10 @@ impl Drop for Device {
     fn drop(&mut self) {
         // SAFETY: the event was created by this struct and nothing waits on it any more.
         let closed = unsafe { Foundation::CloseHandle(self.fence_event) };
-        #[expect(
-            let_underscore_drop,
-            clippy::let_underscore_must_use,
-            reason = "a handle that fails to close while the device goes away leaves nothing to \
-                      retry and no one to report to"
-        )]
-        let _ = closed;
+        debug_assert!(
+            closed.is_ok(),
+            "the fence event this device made closes once: {closed:?}"
+        );
     }
 }
 
