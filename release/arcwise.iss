@@ -10,7 +10,7 @@
   #error Pass the folder of files to install, such as /DStaging=C:\staging
 #endif
 #ifndef OutputDir
-  #define OutputDir "..\dist"
+  #error Pass the folder to write the installer to, such as /DOutputDir=C:\release-files
 #endif
 ; Windows version resources take numbers only, so drop any pre-release suffix such as -beta.1.
 #define NumericVersion Copy(AppVersion, 1, Pos("-", AppVersion + "-") - 1)
