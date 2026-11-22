@@ -22,6 +22,8 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 | `crates/arcwise_ui` | The window and everything in it, on GPUI: the startup the binary hands over to (the running mutex, the theme, the title bar, the window and its place), the choosers, the map, the lineup panel and player, the settings window, the settings file, themes, pictures, keyboard shortcuts, and when to check for updates. `crates/arcwise` only starts it. |
 | `crates/arcwise_update` | Updates: asking GitHub for the latest release, downloading its installer, and checking its attestation, which shows that this repository's release workflow built it. Its Sigstore dependency stays out of every other crate. |
 | `crates/arcwise_video` | Hardware video decoding through Windows Media Foundation: a decoder thread that opens a clip and sends frames as BGRA pixels. It holds unsafe code, so `dylint.toml` lists it in `unsafe_crates`. |
+| `release/package.sh` | Writes each target's release files, the ones `release` in `.copier-answers.yml` names. [docs/maintaining.md](docs/maintaining.md#extend-what-trellis-generates) says what it gets. It is a rule, like the workflows. |
+| `release/arcwise.iss` | The Inno Setup script `release/package.sh` builds the installer from: per-user, to `%LOCALAPPDATA%\Programs\Arcwise`, under the AppId every earlier version used. A rule, like the script. |
 
 Add a row for each crate you add, in the same pull request as the rule change that allows it.
 
@@ -92,7 +94,10 @@ Then review the diff against the [review checklist](docs/style.md#checked-in-rev
 ### Advisories
 
 The Advisories workflow also runs `just deny` every week. A new advisory can fail a pull request
-that changed nothing; fix it with `cargo update -p <crate>` in its own pull request.
+that changed nothing; fix it with `cargo update -p <crate>` in its own pull request. It also runs
+`just stale-licenses`, which fails on an entry in `about.toml` for a crate the dependency graph
+doesn't hold. Unless the code pull request that adds that crate is still open, remove the entry,
+and its exception in `deny.toml`, in a rules pull request.
 
 ## Code
 
@@ -229,6 +234,15 @@ next, or add the rule together with an `expect` and a real reason at each place 
 proc-macro dependency is code: list the crate in `proc_macro_crates` in one pull request, then add
 the dependency and its first use in the next. Run `just rule-changes` to see how your changes
 sort: it counts the rule and code files, and lists both when a change mixes them.
+
+A dependency under a license that `deny.toml` and `about.toml` don't accept lands in two pull
+requests. First, in a rules pull request, accept the license for that crate alone, with the
+reason in a comment: an exception in `deny.toml`, such as `[[licenses.exceptions]]` with
+`crate = "webpki-roots"` and `allow = ["CDLA-Permissive-2.0"]`, and an entry in `about.toml`, such
+as `[webpki-roots]` with `accepted = ["CDLA-Permissive-2.0"]`. `just deny` and `just notices` pass
+with an entry for a crate the dependency graph doesn't hold yet. Then add the dependency in a code
+pull request. Accepting the license for every crate, in `allow` or `accepted`, lets any later
+dependency use it too, so do that only when the owner decides it.
 
 ## License
 
