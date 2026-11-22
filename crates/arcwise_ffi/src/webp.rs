@@ -30,9 +30,12 @@ pub enum WebpError {
     /// The picture's header is readable but its data isn't.
     #[error("the WebP data is damaged")]
     Damaged,
-    /// The picture is too large to hold in memory here.
+    /// The picture's size overflows the arithmetic of its buffer or of libwebp's arguments.
     #[error("the WebP picture is too large")]
     TooLarge,
+    /// The pixels given don't hold exactly the width by height asked for.
+    #[error("the pixels don't match the size given")]
+    WrongLength,
     /// The encoder refused the pixels.
     #[error("libwebp could not encode the picture")]
     Encode,
@@ -43,7 +46,7 @@ pub enum WebpError {
 /// # Errors
 ///
 /// [`WebpError::NotWebp`] when `bytes` isn't a WebP picture, [`WebpError::Damaged`] when its data
-/// can't be decoded, and [`WebpError::TooLarge`] when its size doesn't fit in memory.
+/// can't be decoded, and [`WebpError::TooLarge`] when its size overflows the buffer's arithmetic.
 #[expect(
     unsafe_code,
     reason = "WebPGetInfo and WebPDecodeBGRAInto are libwebp's C functions"
@@ -95,8 +98,9 @@ pub fn decode_bgra(bytes: &[u8]) -> Result<Bgra, WebpError> {
 ///
 /// # Errors
 ///
-/// [`WebpError::TooLarge`] when `rgba` doesn't hold `width` by `height` pixels or the size
-/// doesn't fit libwebp's, and [`WebpError::Encode`] when libwebp refuses the pixels.
+/// [`WebpError::WrongLength`] when `rgba` doesn't hold `width` by `height` pixels,
+/// [`WebpError::TooLarge`] when the size doesn't fit libwebp's arguments, and
+/// [`WebpError::Encode`] when libwebp refuses the pixels.
 #[expect(
     unsafe_code,
     reason = "WebPEncodeLosslessRGBA and WebPFree are libwebp's C functions"
@@ -110,7 +114,7 @@ pub fn encode_lossless_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<
         .and_then(|stride| stride.checked_mul(usize::try_from(height).ok()?))
         .ok_or(WebpError::TooLarge)?;
     if rgba.len() != needed {
-        return Err(WebpError::TooLarge);
+        return Err(WebpError::WrongLength);
     }
     let mut out = ptr::null_mut();
     // SAFETY: `rgba` holds `height` rows of `stride` bytes, which bounds what libwebp reads, and
@@ -225,8 +229,20 @@ mod tests {
     fn refuses_pixels_that_do_not_fit_the_size() {
         assert_eq!(
             encode_lossless_rgba(&[0; 12], 2, 2),
-            Err(WebpError::TooLarge),
+            Err(WebpError::WrongLength),
             "2x2 pixels need 16 bytes"
+        );
+    }
+
+    #[test]
+    fn refuses_a_picture_cut_off_after_its_header() {
+        let rgba: Vec<u8> = (0..64_u8).map(|i| i.wrapping_mul(37)).collect();
+        let encoded = encode_lossless_rgba(&rgba, 4, 4).expect("4x4 pixels encode");
+        let header_only = &encoded[..30];
+        assert_eq!(
+            decode_bgra(header_only),
+            Err(WebpError::Damaged),
+            "the size is readable, the pixels aren't"
         );
     }
 }
