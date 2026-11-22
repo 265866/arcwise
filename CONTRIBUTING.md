@@ -19,6 +19,9 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 | `crates/arcwise_core` | The logic. A crate of its own keeps the binary's command-line and runtime dependencies out of it, lets `just docs` check the doc comments of both crates, and gives `internal_dependencies` its first edge: the binary depends on the logic, never the reverse. |
 | `crates/arcwise_video` | Hardware video decoding through Windows Media Foundation: a decoder thread that opens a clip and sends frames as BGRA pixels. It holds unsafe code, so `dylint.toml` lists it in `unsafe_crates`. |
 | `crates/arcwise_ffi` | Safe wrappers over the other foreign calls the app makes: the Win32 window, theme, keyboard and mutex calls, and libwebp's decoder. It holds unsafe code, so `dylint.toml` lists it in `unsafe_crates`, and keeps it out of the binary. |
+| `crates/arcwise_remote` | Libraries on the web: the folder that mirrors each one in `%LOCALAPPDATA%\Arcwise\libraries`, fetching only what changed, and reading the list of libraries shown, from folders and mirrors, into parts for `arcwise_core` to merge. |
+| `crates/arcwise_update` | Updates: asking GitHub for the latest release, downloading its installer, and checking its attestation, that this repository's release workflow built it. Its network and Sigstore dependencies stay out of every other crate. |
+| `crates/arcwise_ui` | The window and everything in it, on GPUI: the choosers, the map, the lineup panel and player, the settings window, the settings file, themes, pictures, keyboard shortcuts, and the updater's schedule. `crates/arcwise` only starts it. |
 
 Add a row for each crate you add, in the same pull request as the rule change that allows it.
 
