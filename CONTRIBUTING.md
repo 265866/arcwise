@@ -17,6 +17,8 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 | --- | --- |
 | `crates/arcwise` | The program: `main.rs` starts it and wires the parts together. No logic that a test would want to call. `arcwise --version` prints the version line and exits 0. `tests/command_line.rs` runs the built binary and checks it. |
 | `crates/arcwise_core` | The logic. A crate of its own keeps the binary's command-line and runtime dependencies out of it, lets `just docs` check the doc comments of both crates, and gives `internal_dependencies` its first edge: the binary depends on the logic, never the reverse. |
+| `crates/arcwise_video` | Hardware video decoding through Windows Media Foundation: a decoder thread that opens a clip and sends frames as BGRA pixels. It holds unsafe code, so `dylint.toml` lists it in `unsafe_crates`. |
+| `crates/arcwise_ffi` | Safe wrappers over the other foreign calls the app makes: the Win32 window, theme, keyboard and mutex calls, and libwebp's decoder. It holds unsafe code, so `dylint.toml` lists it in `unsafe_crates`, and keeps it out of the binary. |
 
 Add a row for each crate you add, in the same pull request as the rule change that allows it.
 

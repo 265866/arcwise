@@ -24,5 +24,7 @@ changelog_path = "./CHANGELOG.md"
 changelog_update = true
 changelog_include = [
     "arcwise_core",
+    "arcwise_ffi",
+    "arcwise_video",
 ]
 git_tag_enable = true
