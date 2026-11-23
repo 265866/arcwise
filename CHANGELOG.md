@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/265866/arcwise/compare/v0.11.1...v0.11.2) - 2026-11-23
+
+### Fixed
+
+- *(ui)* keep a settings file Arcwise couldn't read, and read one with a byte order mark ([#27](https://github.com/265866/arcwise/pull/27))
+
 ## [0.11.1](https://github.com/265866/arcwise/compare/v0.11.0...v0.11.1) - 2026-11-23
 
 ### Other
