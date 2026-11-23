@@ -18,7 +18,7 @@ arcwise_video = { path = "../arcwise_video" }
 gpui.workspace = true
 gpui_platform.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
-resvg = { version = "0.46", default-features = false }
+resvg = { version = "0.50", default-features = false }
 semver = "1"
 serde.workspace = true
 serde_json.workspace = true

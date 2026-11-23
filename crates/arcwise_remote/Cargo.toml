@@ -14,7 +14,7 @@ arcwise_core = { path = "../arcwise_core" }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 ureq = { version = "3", default-features = false, features = [
     "rustls-no-provider",
     "platform-verifier",

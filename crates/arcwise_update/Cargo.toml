@@ -15,7 +15,7 @@ semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Pinned: still 0.x, and each release refreshes the Sigstore trust root built into the app.
-sigstore-verify = { version = "=0.15.0", default-features = false, features = ["aws-lc-rs"] }
+sigstore-verify = { version = "=0.16.0", default-features = false, features = ["aws-lc-rs"] }
 ureq = { version = "3", default-features = false, features = [
     "rustls-no-provider",
     "platform-verifier",
