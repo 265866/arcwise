@@ -1,5 +1,5 @@
 # Copier writes this file. `uvx copier update` reads it to update the project from trellis.
-_commit: v0.18.0
+_commit: v0.19.2
 _src_path: https://github.com/265866/trellis.git
 architectures:
 - x86_64
@@ -18,6 +18,10 @@ release:
         x86_64-pc-windows-msvc:
         - arcwise-{version}-x64-setup.exe
         - arcwise-{version}-x64.zip
+    installer:
+        x86_64-pc-windows-msvc:
+            app_id: C882D75D-CDF1-4F35-91C7-8D8A7A01A810
+            file: arcwise-{version}-x64-setup.exe
     name: Arcwise
 visibility: public
 web_ui: false

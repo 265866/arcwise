@@ -12,9 +12,12 @@ each platform:
 
 1. Download the file you want for your platform, and `SHA256SUMS.txt`, from the release.
 2. Check the download as [Verify a release](verifying-releases.md) shows.
-3. Install it. Run an installer. Keep a bare program, or the one an archive holds once you unpack
-   it, where you keep programs, such as a directory on your `PATH` for a command-line one. On Linux
-   or macOS, make a bare program executable first, with `chmod +x`.
+3. Install it. If it's an installer, run it. Otherwise keep the program, or the one an archive
+   holds once you unpack it, where you keep programs, such as a directory on your `PATH` for a
+   command-line one. The Windows installer installs for you alone, under
+   `%LOCALAPPDATA%\Programs`, without administrator rights, and an installed copy is removed from
+   Windows' installed apps. It isn't signed, so when it comes from a browser, Windows SmartScreen
+   warns about it: choose **More info**, then **Run anyway**.
 
 To update, install the new release, unless the program updates itself.
 

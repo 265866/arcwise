@@ -254,6 +254,7 @@ An update leaves them alone.
   | `BINARY` | The program the release built, relative to the root. |
   | `NOTICES` | The license notices, `target/THIRD-PARTY-LICENSES.html`, which the build can read too. |
   | `DIST` | The empty directory, an absolute path, to write the files to. |
+  | `STAGING` | For a target with an installer, the empty directory, an absolute path, to stage the files it installs in; unset for any other target. |
 
   The build fails unless `DIST` then holds exactly the names `files` lists for the target, each a
   file with contents, and fails for a target `files` doesn't list, so give a new platform's files
@@ -279,6 +280,63 @@ An update leaves them alone.
   ```
 
   The answer replaces the whole mapping, so repeat every key you keep.
+- **Windows installer.** The `release` answer's `installer` key gives a Windows target an installer,
+  which the release builds with Inno Setup and publishes as one of its files. It installs for the
+  current user alone, under `%LOCALAPPDATA%\Programs`, without administrator rights, with one Start
+  menu entry, an optional desktop entry and an entry in Windows' installed apps, and it runs
+  silently with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`, so the program can update itself. To add
+  one, generate an AppId once, with `uuidgen` or, in PowerShell, `New-Guid`, and give it without
+  braces. The AppId must never change and must never be copied from another project: Windows finds
+  the installed program by it. Give every Windows target the same one, which the answer's check
+  requires: the x64 installer also runs on ARM64 Windows, and two AppIds would give one user two
+  installs and two uninstall entries. `copier update` refuses an answer, passed or typed at its
+  prompt, whose `app_id` differs from the one `.copier-answers.yml` holds for that target. It
+  doesn't compare when the update also passes `project_name`, as `--data-file .copier-answers.yml`
+  does, and it can't catch an edit to that file, an installer moved to another target with a new
+  AppId in one update, or one removed and later added back with another AppId. A first `copier copy`
+  that asks for the project's name and gets an installer answer typed at the prompt may print a
+  harmless `MissingFileWarning`. `file` names one of the target's `files`, ending in `.exe`, and
+  `name`, optional, is the name the installer shows, the answer's `name` by default:
+
+  ```sh
+  uvx copier update --defaults --vcs-ref=:current: \
+    --data 'release={checksums: SHA256SUMS.txt, files: {
+      x86_64-pc-windows-msvc: ["arcwise-{version}-x64-setup.exe"]
+    }, installer: {
+      x86_64-pc-windows-msvc: {app_id: <GUID>, file: "arcwise-{version}-x64-setup.exe"}
+    }}'
+  ```
+
+  Like the release files above, that's a starter: add the project's other targets and keys. trellis
+  then writes `release/installer.iss`, the installer's Inno Setup script, which every update
+  rewrites, and `release/installer-custom.iss` once, which it includes and an update never touches.
+  The custom file holds what is particular to the program: `[Code]`, such as an uninstaller that
+  waits while the program runs, which it can tell by a mutex the program creates; `[InstallDelete]`
+  for the files an older version installed that a newer one doesn't, which an upgrade otherwise
+  leaves; `[UninstallDelete]` for files the program writes; a mutex name; the icon, with
+  `SetupIconFile`; and extra `[Run]` entries, such as starting the program after an install. Inno
+  Setup refuses a `[Setup]` directive set twice, so the custom file changes the two installer.iss
+  lets it with a `#define`: `CloseApplications` and `SetupMutex`, such as the mutex an earlier
+  installer used. For a target with an installer, `release/package.sh` stages the files to install
+  in `STAGING`, with `arcwise.exe` at its top, and writes only the target's other files
+  to `DIST`; the build then compiles the script with the pinned Inno Setup and writes the installer
+  to `DIST`. An update that drops the `installer` key deletes both files, the custom file too; git
+  history keeps it.
+
+  An upgrade closes the running program first, without asking in a silent install. Windows can't
+  close a process without a window, so when one of the program's processes has none, such as a tray
+  helper or a background worker, the installer rolls back, keeps the installed version and exits
+  with 5. Either give that process a hidden top-level window that exits on `WM_ENDSESSION`, or add
+  `#define CloseApplications "force"` to the custom file, which kills it without warning. The silent
+  uninstaller, `unins000.exe` in the install folder, returns about half a second before the folder
+  is gone, so a script that checks the folder waits for it.
+
+  The installer isn't signed, so Windows SmartScreen warns about it when it comes from a browser,
+  until users choose **More info** and **Run anyway**; a download through `gh`, `curl` or the
+  program's own updater gets no warning. trellis's tests install, upgrade and uninstall on
+  GitHub's Windows runners, which run elevated, so they don't prove a standard user's install. A
+  program that pins its repository's ID to verify updates stops updating when the repository
+  moves, and users then install the next version by hand.
 
 - **Deploy kit.** Keep the scripts and units that install and run it on a host in
   `crates/arcwise/deploy/`. release-plz counts only the commits that change a file in a

@@ -23,7 +23,7 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 | `crates/arcwise_update` | Updates: asking GitHub for the latest release, downloading its installer, and checking its attestation, which shows that this repository's release workflow built it. Its Sigstore dependency stays out of every other crate. |
 | `crates/arcwise_video` | Hardware video decoding through Windows Media Foundation: a decoder thread that opens a clip and sends frames as BGRA pixels. It holds unsafe code, so `dylint.toml` lists it in `unsafe_crates`. |
 | `release/package.sh` | Writes each target's release files, the ones `release` in `.copier-answers.yml` names. [docs/maintaining.md](docs/maintaining.md#extend-what-trellis-generates) says what it gets. It is a rule, like the workflows. |
-| `release/arcwise.iss` | The Inno Setup script `release/package.sh` builds the installer from: per-user, to `%LOCALAPPDATA%\Programs\Arcwise`, under the AppId every earlier version used. A rule, like the script. |
+| `release/installer-custom.iss` | Arcwise's own part of the Windows installer, which trellis's `release/installer.iss` includes: the installer's icon and the setup mutex earlier installers used, the file an upgrade from 0.10.0 deletes, the downloaded updates an uninstall deletes, starting Arcwise after an install or an update, and the uninstaller's wait for a running Arcwise. A rule, like the script. |
 
 A build with `#![windows_subsystem = "windows"]`, as a Windows GUI app has, gets no console, so on
 Windows its `--version` prints only into a pipe or a file, such as
@@ -153,9 +153,11 @@ Each crate has one job. `just policy` checks every crate against the rules
 one:
 
 - **Place and manifest.** Put it in `crates/<name>`. Its `[lints]` table is exactly
-  `workspace = true`. It inherits `version`, `edition`, `rust-version`, `publish` and `license`
-  from the workspace. The crates share one version, which release-plz bumps in the root
-  `Cargo.toml` alone; trellis doesn't support a crate versioned apart from the others.
+  `workspace = true`. Its `[package]` gives a `description` and inherits `version`, `edition`,
+  `rust-version`, `repository`, `license` and `publish` from the workspace, each as
+  `<key>.workspace = true`, as the generated crate's `Cargo.toml` does. The crates share one
+  version, which release-plz bumps in the root `Cargo.toml` alone; trellis doesn't support a crate
+  versioned apart from the others.
 - **Settings.** Give it an entry in `internal_dependencies` in `[workspace.metadata.policy]`,
   which lists the workspace crates it may depend on directly, and list it in `changelog_include`
   in `release-plz.toml`, so its commits reach the release notes. A build script needs the crate in
@@ -277,12 +279,20 @@ add the dependency in a code pull request.
 
 A framework that lets in `ctor` or `inventory` this way may also have its macros place
 constructors, code that runs before `main()`, in this project's own code, which
-`code_before_main` reports. GPUI's `actions!` and `#[derive(Action)]` do. Allow them in the same
-rules pull request as the `wrappers` entry: list each macro in `constructor_macros` in
+`code_before_main` reports. GPUI's `actions!` and `#[derive(Action)]` place one only when they
+register the action, and its `register_action!` always does. Give each action
+`#[action(no_register)]`, beside `#[derive(Action)]` or before its name in `actions!`, and call no
+`register_action!`, and they place none. The project then needs no entry, and the lint stays
+strict. An unregistered action can't be invoked by name or built from JSON, such as a keymap file.
+
+Listing the macros is the fallback: a listed macro may place any constructor. Allow them in the
+same rules pull request as the `wrappers` entry: list each macro in `constructor_macros` in
 `dylint.toml`, by the path the report names, the crate that defines the macro and its name, such as
-`gpui::actions` and `gpui_macros::Action`. A listed macro may place any constructor, so list only
-the macros the framework needs. A constructor that one of this project's own macros writes stays
-reported, even inside a listed macro.
+`gpui::actions` and `gpui_macros::Action`. For GPUI, that entry is all they need. The lint levels
+that a listed macro writes around its constructor, such as the `allow` that `inventory::submit!`
+writes, pass `suppression_policy` without an entry in `trusted_macro_crates`, as long as they cover
+no code written in this project's source. List only the macros the framework needs. A constructor
+that one of this project's own macros writes stays reported, even inside a listed macro.
 
 A deploy kit, the scripts, container files and systemd units in `crates/arcwise/deploy/`
 that install and run the project on a host, is code too, like the rest of `crates/`, and so is a kit

@@ -165,9 +165,12 @@ Beyond the Google guide, the workspace also turns on:
   `publish`, and `license` when the workspace has one (the crates share one version, which
   release-plz bumps in the root `Cargo.toml` alone; trellis doesn't support a crate versioned apart
   from the others), and keeps its sources, `#[path]` files included, inside the crate, with no
-  symbolic link in or above its directory; that the repository holds no git submodule, or other git
-  repository, anywhere, since a checkout that initializes one holds files no check or review read;
-  that `.cargo/config.toml` holds only the Windows `+crt-static` flags; that a crate depends
+  symbolic link in or above its directory; that every published crate's directory holds the
+  license files its `license` names, by exactly these names, `LICENSE` for `MIT` and `LICENSE-MIT`
+  and `LICENSE-APACHE` for `MIT OR Apache-2.0`, since a crate's package holds only the files under
+  its directory; that the repository holds no git submodule, or other git repository, anywhere,
+  since a checkout that initializes one holds files no check or review read; that
+  `.cargo/config.toml` holds only the Windows `+crt-static` flags; that a crate depends
   directly only on proc-macro crates listed in `proc_macro_crates`, since a proc macro writes code
   the custom lints don't check; that the root `AGENTS.md` is the only file of instructions for
   coding agents; that `release-plz.toml` exists, that every crate's commits reach the release notes

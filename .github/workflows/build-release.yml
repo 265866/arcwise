@@ -43,6 +43,7 @@ jobs:
           - os: windows-2025
             target: x86_64-pc-windows-msvc
             files: arcwise-{version}-x64-setup.exe arcwise-{version}-x64.zip
+            installer: arcwise-{version}-x64-setup.exe
     defaults:
       run:
         shell: bash
@@ -83,14 +84,36 @@ jobs:
             throw 'arcwise.exe imports VCRUNTIME140.dll, so +crt-static from .cargo/config.toml was not applied.'
           }
 
+      # Inno Setup builds the installer the release answer's installer entry names for this target.
+      # The compiler is the version pinned here, checked against its SHA-256 and installed for this
+      # run alone, so a change to the runner's own copy never changes what ships.
+      - name: Install Inno Setup
+        if: matrix.installer
+        env:
+          URL: https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe
+          SHA256: 8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0
+        run: |
+          setup="$RUNNER_TEMP/innosetup.exe"
+          dir="$RUNNER_TEMP/inno-setup"
+          curl --fail --silent --show-error --location --retry 3 --output "$setup" "$URL"
+          echo "$SHA256  $setup" | sha256sum --check --strict --quiet
+          # Git Bash would rewrite the installer's `/` options as paths.
+          MSYS_NO_PATHCONV=1 "$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER \
+            /NOICONS /PORTABLE=1 "/DIR=$(cygpath -w "$dir")" "/LOG=$(cygpath -w "$RUNNER_TEMP/inno-setup.log")"
+          "$dir/ISCC.exe" --version
+          echo "ISCC=$(cygpath --mixed "$dir/ISCC.exe")" >> "$GITHUB_ENV"
+
       # release/package.sh writes this target's release files, the ones the release answer names,
       # to DIST, and nothing else: every file there is attested and published, under the name the
       # answer gives, and docs/install.md lists them. docs/maintaining.md says what it gets.
+      # For a target with an installer, the script stages the files to install in STAGING instead,
+      # and the step builds the installer from release/installer.iss into DIST itself.
       - name: Package
         id: archive
         env:
           TARGET: ${{ matrix.target }}
           FILES: ${{ matrix.files }}
+          INSTALLER: ${{ matrix.installer }}
           NAME: arcwise
           PACKAGE: arcwise
         run: |
@@ -106,10 +129,32 @@ jobs:
           fi
           rm -rf "$DIST" dist
           mkdir -p "$DIST"
+          if [ -n "$INSTALLER" ]; then
+            export STAGING="$RUNNER_TEMP/staging"
+            rm -rf "$STAGING"
+            mkdir -p "$STAGING"
+          fi
           bash -eo pipefail release/package.sh
           if [ -e dist ]; then
             echo "::error::release/package.sh wrote dist/, which the release publishes whole; write only to \$DIST."
             exit 1
+          fi
+          if [ -n "$INSTALLER" ]; then
+            installer=${INSTALLER//\{version\}/$version}
+            if [ -e "$DIST/$installer" ]; then
+              echo "::error::release/package.sh wrote $installer, which the release builds from release/installer.iss; stage the files it installs in \$STAGING."
+              exit 1
+            fi
+            if [ ! -f "$STAGING/$NAME.exe" ]; then
+              echo "::error::release/package.sh staged no $NAME.exe in \$STAGING, which the installer's shortcuts start."
+              exit 1
+            fi
+            # Git Bash would rewrite ISCC's `/` options as paths, so Windows paths go in as defines.
+            MSYS_NO_PATHCONV=1 "$ISCC" /Qp "/DTarget=$TARGET" "/DAppVersion=$version" \
+              "/DStaging=$(cygpath -w "$STAGING")" "/O$(cygpath -w "$DIST")" "$(cygpath -w release/installer.iss)"
+            # Signing: the installer ships unsigned. Signing it would need a trellis change here,
+            # passing the sign tool to ISCC with /S, before the checks below and the attestation,
+            # with SignTool in release/installer-custom.iss.
           fi
           expected=$(for file in $FILES; do echo "${file//\{version\}/$version}"; done | sort)
           written=$(cd "$DIST" && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | sort)
