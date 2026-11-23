@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/265866/arcwise/compare/v0.11.0...v0.11.1) - 2026-11-23
+
+### Other
+
+- the installer is now built by trellis's pinned Inno Setup 7.1.1
+
 ## [0.11.0](https://github.com/265866/arcwise/releases/tag/v0.11.0) - 2026-11-22
 
 Arcwise is rebuilt, and this is its first release from this repository. The app works as 0.10.0 did. It keeps your settings, your downloaded lineups and your library folders where they are.
