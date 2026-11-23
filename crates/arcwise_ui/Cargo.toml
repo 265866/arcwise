@@ -18,7 +18,9 @@ arcwise_video = { path = "../arcwise_video" }
 gpui.workspace = true
 gpui_platform.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
-resvg = { version = "0.46", default-features = false }
+# Pictures and gzip-compressed files inside a map's SVG: features gpui's resvg 0.46 used to
+# bring in, and resvg 0.50 is a copy of Arcwise's own.
+resvg = { version = "0.50", default-features = false, features = ["raster-images", "svgz"] }
 semver = "1"
 serde.workspace = true
 serde_json.workspace = true

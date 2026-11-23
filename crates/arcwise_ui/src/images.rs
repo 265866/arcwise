@@ -556,6 +556,43 @@ mod tests {
         );
     }
 
+    /// `bytes` as a base64 `data:` address, the way an SVG embeds a picture in itself.
+    fn data_uri(bytes: &[u8]) -> String {
+        const DIGITS: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut uri = String::from("data:image/png;base64,");
+        for chunk in bytes.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0_u32, |n, (i, &b)| n | (u32::from(b) << (16 - 8 * i)));
+            for i in 0..4 {
+                uri.push(if i <= chunk.len() {
+                    char::from(DIGITS[((n >> (18 - 6 * i)) & 63) as usize])
+                } else {
+                    '='
+                });
+            }
+        }
+        uri
+    }
+
+    #[test]
+    fn draws_a_picture_embedded_in_an_svg() {
+        let green = RgbaImage::from_pixel(4, 4, Rgba([0, 255, 0, 255]));
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <image x="0" y="0" width="100" height="100" href="{}"/>
+        </svg>"#,
+            data_uri(&png(&green))
+        );
+        let image = render_svg(svg.as_bytes(), Look::Plain).unwrap();
+        assert_eq!(
+            image.get_pixel(SVG_SIZE / 2, SVG_SIZE / 2).0,
+            [0, 255, 0, 255]
+        );
+    }
+
     #[test]
     fn draws_an_svg_across_a_size_or_a_window_onto_it() {
         let red_left_blue_right =
