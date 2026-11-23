@@ -67,7 +67,7 @@ arcwise = [
 ]
 
 [workspace.package]
-version = "0.11.2"
+version = "0.11.3"
 edition = "2024"
 rust-version = "1.100"
 repository = "https://github.com/265866/arcwise"

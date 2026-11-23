@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3](https://github.com/265866/arcwise/compare/v0.11.2...v0.11.3) - 2026-11-23
+
+### Fixed
+
+- *(deps)* update cargo ([#34](https://github.com/265866/arcwise/pull/34))
+
+### Other
+
+- update Cargo.lock dependencies
+- *(update)* label the GitHub CLI attestation fixture as public data ([#32](https://github.com/265866/arcwise/pull/32))
+
 ## [0.11.2](https://github.com/265866/arcwise/compare/v0.11.1...v0.11.2) - 2026-11-23
 
 ### Fixed
