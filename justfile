@@ -20,7 +20,7 @@ lints_nightly := "nightly-2026-11-12"
 
 # The trellis commit the lints in Cargo.toml and the checker below come from. `uvx copier update`
 # moves both.
-trellis_rev := "75916a993d65062702ba4009c9c2b3fbadba6d4c"
+trellis_rev := "0dc78e726c6394062b5e1a144ce8a2aa6e084f53"
 
 # rustdoc warnings fail `just docs` and the doctests. Cargo reads `CARGO_ENCODED_RUSTDOCFLAGS`
 # before `RUSTDOCFLAGS`, so a caller's setting of either, even an empty one, can't drop the flag.
@@ -135,9 +135,9 @@ deny:
 links:
     lychee --offline --include-fragments --no-progress --exclude-path target './**/*.md'
 
-# The structure rules: workspace lints, manifests, build scripts, config files, crate
-# dependencies, the release changelog, the docs index, and the docs layout that `docs_files` and
-# `readme_sections` in Cargo.toml set.
+# The structure rules: workspace lints, manifests, a published crate's license files, build
+# scripts, config files, crate dependencies, the release changelog, the docs index, and the docs
+# layout that `docs_files` and `readme_sections` in Cargo.toml set.
 #
 # Checks the structure rules.
 policy: install-policy
