@@ -4,7 +4,9 @@
 ; refuses a [Setup] directive set twice, so the custom file changes the two this script lets it
 ; with a #define: CloseApplications and SetupMutex. The release build compiles it
 ; with Inno Setup for each target the entry names:
-;   ISCC /DTarget=<target triple> /DAppVersion=<version> /DStaging=<folder> /O<folder> release\installer.iss
+;   ISCC "/DTarget=<target triple>" "/DAppVersion=<version>" "/DStaging=<folder>" "/O<folder>"
+;     "release\installer.iss"
+; In Git Bash, set MSYS_NO_PATHCONV=1 first, or it rewrites the / options as paths.
 ; Staging holds the files release/package.sh staged to install. docs/maintaining.md says what it
 ; gets.
 
@@ -15,7 +17,7 @@
   #error Pass the version, such as /DAppVersion=1.4.2
 #endif
 #ifndef Staging
-  #error Pass the folder of files to install, such as /DStaging=C:\staging
+  #error Pass the folder of files to install, such as "/DStaging=C:\staging"
 #endif
 
 #if Target == "x86_64-pc-windows-msvc"
@@ -33,21 +35,22 @@
 #define Release Copy(AppVersion, 1, Pos("-", AppVersion + "-") - 1)
 #define NumericVersion Copy(Release, 1, Pos("+", Release + "+") - 1)
 
+; The include splices the custom file in as text, so whatever follows it before [Setup] lands in
+; the custom file's last section, such as [Code], where a `;` line isn't a comment. Only
+; preprocessor directives come between them.
+;
+; CloseApplications closes the running program before setup replaces its files, without asking in
+; a silent install, such as the one a program starts to update itself. A program with no window
+; can't be closed this way: setup then rolls back and exits with 5, unless the custom file defines
+; it as "force", as docs/maintaining.md says. SetupMutex keeps two copies of the program that each
+; downloaded an update from running its installer at once.
 #include "installer-custom.iss"
-
-; Closes the running program before it replaces its files, without asking in a silent install,
-; such as the one a program starts to update itself. A program with no window can't be closed
-; this way: setup then rolls back and exits with 5, unless this is "force", as
-; docs/maintaining.md says.
 #ifndef CloseApplications
   #define CloseApplications "yes"
 #endif
-; Two copies of the program can each download an update and start its installer.
 #ifndef SetupMutex
   #define SetupMutex AppId + ".Setup"
 #endif
-
-
 [Setup]
 AppId={{{#AppId}}
 AppName={#AppName}
