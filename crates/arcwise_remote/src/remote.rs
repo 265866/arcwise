@@ -689,8 +689,14 @@ fn fetch_claimed(
     }
     file.rewind()?;
     let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher)?;
-    let got = format!("{:x}", hasher.finalize());
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let got = hex::encode(hasher.finalize());
     if expected.is_some_and(|e| e.sha256 != got) {
         file.set_len(0)?;
         bail!("{url} did not match the library's manifest");
@@ -910,7 +916,7 @@ mod tests {
     }
 
     fn sha(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     /// A manifest listing one file.
