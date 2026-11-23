@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
-use std::{env, fs, iter, process};
+use std::{env, fs, io, iter, process};
 
 use anyhow::Context as _;
 use arcwise_core::{AgentId, MapId, Side};
@@ -22,13 +22,17 @@ use crate::pacing::Speed;
 use crate::placement::Placement;
 use crate::theme::{self, Mode};
 
+/// The UTF-8 byte order mark, which some editors save at the start of a file.
+const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
+
 /// Everything the settings file holds. A field missing from the file takes its default.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "each bool is a separate on/off setting the file has always stored as true or false \
-              under its own name, and an enum per setting would change the file's format"
+    reason = "each bool but `file_unread`, which is never saved, is a separate on/off setting the \
+              file has always stored as true or false under its own name, and an enum per setting \
+              would change the file's format"
 )]
 pub(crate) struct Settings {
     /// The library folder chosen last, before Arcwise read libraries from the web. Kept for an
@@ -67,6 +71,11 @@ pub(crate) struct Settings {
     /// [`crate::shortcuts::Shortcuts::changes`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) shortcuts: BTreeMap<String, Vec<String>>,
+    /// Whether the file could not be read when Arcwise opened, so these settings started from the
+    /// defaults. [`Settings::save`] then leaves it alone until Arcwise opens again, even if it is
+    /// fixed meanwhile, so these never replace what its owner fixed.
+    #[serde(skip)]
+    pub(crate) file_unread: bool,
 }
 
 impl Default for Settings {
@@ -86,6 +95,7 @@ impl Default for Settings {
             window: None,
             version: None,
             shortcuts: BTreeMap::new(),
+            file_unread: false,
         }
     }
 }
@@ -191,41 +201,78 @@ impl Settings {
     }
 
     /// Reads the settings, or the defaults when there are none yet or they cannot be read. A
-    /// file that is there but cannot be read is reported.
+    /// file that is there but cannot be read is reported, and [`Settings::save`] leaves it alone
+    /// for the rest of this run; see [`Settings::file_unread`].
     #[must_use]
     pub(crate) fn load() -> Settings {
-        let Some(path) = Self::path() else {
-            return Settings::default();
-        };
-        match Self::read(&path) {
-            Ok(settings) => settings,
+        Self::path().map_or_else(Settings::default, |path| Self::load_from(&path))
+    }
+
+    /// [`Settings::load`], from the file at `path`.
+    fn load_from(path: &Path) -> Settings {
+        match Self::read(path) {
+            Ok(Some(settings)) => settings,
+            Ok(None) => Settings::default(),
             Err(e) => {
-                if path.exists() {
-                    remote::report(format_args!("{e:#}"));
+                remote::report(format_args!("{e:#}, so Arcwise leaves it as it is"));
+                Settings {
+                    file_unread: true,
+                    ..Settings::default()
                 }
-                Settings::default()
             }
         }
     }
 
-    /// Reads the settings file at `path`.
+    /// Reads the settings file at `path`: `None` when there is none, or it is empty, as a write cut
+    /// short can leave it, or holds only whitespace or NUL bytes, as a power cut can leave it. A
+    /// byte order mark at its start, which some editors save, is skipped.
     ///
     /// # Errors
     ///
-    /// When the file cannot be read, or is not a settings file.
-    pub(crate) fn read(path: &Path) -> anyhow::Result<Settings> {
-        let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    /// When the file is there but cannot be read, or is not a settings file.
+    fn read(path: &Path) -> anyhow::Result<Option<Settings>> {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let json = bytes.strip_prefix(BYTE_ORDER_MARK).unwrap_or(&bytes);
+        if json.iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
+            return Ok(None);
+        }
+        serde_json::from_slice(json)
+            .map(Some)
+            .with_context(|| format!("parsing {}", path.display()))
     }
 
-    /// Saves every setting, over whatever the file holds.
+    /// Saves every setting over the file, unless it could not be read when Arcwise opened (see
+    /// [`Settings::file_unread`]) or cannot be read now.
     ///
     /// # Errors
     ///
-    /// When `APPDATA` is not set, or the file cannot be written.
+    /// When `APPDATA` is not set, and as [`Settings::write_whole`] says.
     pub(crate) fn save(&self) -> anyhow::Result<()> {
         let path = Self::path().context("APPDATA is not set")?;
-        self.write(&path)
+        self.write_whole(&path)
+    }
+
+    /// Writes every setting to `path`, unless a file is there that does not parse, as after a
+    /// mistaken hand edit, or did not when Arcwise opened. The file is left for its owner to fix
+    /// rather than replaced by these settings.
+    ///
+    /// # Errors
+    ///
+    /// When the file could not be read when Arcwise opened, is there but cannot be read or does
+    /// not parse, or cannot be written.
+    fn write_whole(&self, path: &Path) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.file_unread,
+            "{} could not be read when Arcwise opened, so Arcwise leaves it as it is until it \
+             opens again",
+            path.display()
+        );
+        Self::read(path)?;
+        self.write(path)
     }
 
     /// Saves only where the window is, over what is in the file, so another Arcwise's settings
@@ -283,11 +330,7 @@ impl Settings {
     /// Changes the settings in the file with `change`, or these if there is no file yet. A file
     /// that does not parse, as after a mistaken hand edit, is left for its owner to fix.
     fn write_over(&self, path: &Path, change: impl FnOnce(&mut Settings)) -> anyhow::Result<()> {
-        let mut saved = if path.exists() {
-            Self::read(path)?
-        } else {
-            self.clone()
-        };
+        let mut saved = Self::read(path)?.unwrap_or_else(|| self.clone());
         change(&mut saved);
         saved.write(path)
     }
@@ -299,7 +342,7 @@ impl Settings {
     /// # Errors
     ///
     /// When the folder cannot be created, or the file cannot be written or renamed.
-    pub(crate) fn write(&self, path: &Path) -> anyhow::Result<()> {
+    fn write(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
@@ -345,7 +388,7 @@ mod tests {
         let path = dir.join("settings.json");
         fs::create_dir_all(&dir).unwrap();
         fs::write(&path, OLD_FULL).unwrap();
-        let read = Settings::read(&path).unwrap();
+        let read = Settings::read(&path).unwrap().unwrap();
         fs::remove_dir_all(&dir).unwrap();
         let expected = Settings {
             library: Some(PathBuf::from(r"D:\lineups")),
@@ -390,6 +433,7 @@ mod tests {
                 ("next_agent".into(), vec!["alt-n".into(), "f2".into()]),
                 ("restart_clip".into(), vec!["ctrl-r".into()]),
             ]),
+            file_unread: false,
         };
         assert_eq!(
             read, expected,
@@ -477,9 +521,10 @@ mod tests {
             }),
             version: Some("0.6.0".into()),
             shortcuts: BTreeMap::from([("restart_clip".into(), vec!["ctrl-r".into()])]),
+            file_unread: false,
         };
         settings.write(&path).unwrap();
-        assert_eq!(Settings::read(&path).unwrap(), settings);
+        assert_eq!(Settings::read(&path).unwrap().unwrap(), settings);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -505,7 +550,7 @@ mod tests {
         };
         this.write_over(&path, |saved| saved.window.clone_from(&this.window))
             .unwrap();
-        let read = Settings::read(&path).unwrap();
+        let read = Settings::read(&path).unwrap().unwrap();
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(read.theme, Mode::Light, "the other's theme is kept");
         assert_eq!(read.window, this.window);
@@ -529,6 +574,159 @@ mod tests {
     }
 
     #[test]
+    fn saving_every_setting_leaves_a_file_that_does_not_parse() {
+        let dir = dir("broken-whole");
+        let path = dir.join("settings.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, "{ \"theme\": \"light\", oops }").unwrap();
+        let saved = Settings::default().write_whole(&path);
+        let left = fs::read_to_string(&path).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(saved.is_err());
+        assert_eq!(left, "{ \"theme\": \"light\", oops }");
+    }
+
+    #[test]
+    fn saving_every_setting_replaces_a_file_that_parses() {
+        let dir = dir("whole");
+        let path = dir.join("settings.json");
+        Settings::default().write(&path).unwrap();
+        let this = Settings {
+            theme: Mode::Light,
+            ..Settings::default()
+        };
+        let written = this.write_whole(&path);
+        let read = Settings::read(&path);
+        fs::remove_dir_all(&dir).unwrap();
+        written.unwrap();
+        assert_eq!(read.unwrap(), Some(this));
+    }
+
+    #[test]
+    fn a_file_with_a_byte_order_mark_is_read_and_saved_over() {
+        let dir = dir("bom");
+        let path = dir.join("settings.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            [BYTE_ORDER_MARK, br#"{"theme": "light", "blur": false}"#].concat(),
+        )
+        .unwrap();
+        let read = Settings::read(&path);
+        let this = Settings {
+            reopen_last: false,
+            ..Settings::default()
+        };
+        let written = this.write_whole(&path);
+        let saved = fs::read(&path);
+        fs::remove_dir_all(&dir).unwrap();
+        let read = read.unwrap().unwrap();
+        assert_eq!(read.theme, Mode::Light);
+        assert!(!read.blur, "the rest of the file counts too");
+        written.unwrap();
+        let saved = saved.unwrap();
+        assert!(!saved.starts_with(BYTE_ORDER_MARK), "saved without one");
+        assert_eq!(serde_json::from_slice::<Settings>(&saved).unwrap(), this);
+    }
+
+    #[test]
+    fn a_file_that_holds_nothing_is_read_as_none_and_saved_over() {
+        for (name, contents) in [
+            ("empty", Vec::new()),
+            ("blank", b" \r\n".to_vec()),
+            ("nul", vec![0; 64]),
+            ("mark", BYTE_ORDER_MARK.to_vec()),
+        ] {
+            let dir = dir(name);
+            let path = dir.join("settings.json");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(&path, contents).unwrap();
+            let loaded = Settings::load_from(&path);
+            let written = Settings::default().write_whole(&path);
+            let saved = Settings::read(&path);
+            fs::remove_dir_all(&dir).unwrap();
+            assert_eq!(
+                loaded,
+                Settings::default(),
+                "{name}: the defaults, not marked unread"
+            );
+            written.unwrap();
+            assert_eq!(saved.unwrap(), Some(Settings::default()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_file_that_does_not_parse_at_launch_is_marked_unread() {
+        let dir = dir("load-broken");
+        let path = dir.join("settings.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, "{ oops }").unwrap();
+        let loaded = Settings::load_from(&path);
+        let missing = Settings::load_from(&dir.join("none.json"));
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(loaded.file_unread);
+        assert_eq!(
+            Settings {
+                file_unread: false,
+                ..loaded
+            },
+            Settings::default()
+        );
+        assert!(!missing.file_unread, "no file yet is not an unread one");
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_an_error_and_left() {
+        let dir = dir("unreadable");
+        let path = dir.join("settings.json");
+        fs::create_dir_all(&path).unwrap();
+        let read = Settings::read(&path);
+        let loaded = Settings::load_from(&path);
+        let written = Settings::default().write_whole(&path);
+        let left = path.is_dir();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(read.is_err(), "an error, not no file");
+        assert!(loaded.file_unread);
+        assert!(written.is_err());
+        assert!(left);
+    }
+
+    #[test]
+    fn saving_every_setting_starts_a_file_that_is_not_there() {
+        let dir = dir("whole-fresh");
+        let path = dir.join("settings.json");
+        fs::create_dir_all(&dir).unwrap();
+        let read = Settings::read(&path);
+        let written = Settings::default().write_whole(&path);
+        let saved = Settings::read(&path);
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            read.unwrap().is_none(),
+            "no file is no settings, not an error"
+        );
+        written.unwrap();
+        assert_eq!(saved.unwrap(), Some(Settings::default()));
+    }
+
+    #[test]
+    fn a_file_unread_at_launch_is_left_even_once_fixed() {
+        let dir = dir("unread");
+        let path = dir.join("settings.json");
+        fs::create_dir_all(&dir).unwrap();
+        let fixed = r#"{"theme": "light"}"#;
+        fs::write(&path, fixed).unwrap();
+        let this = Settings {
+            file_unread: true,
+            ..Settings::default()
+        };
+        let written = this.write_whole(&path);
+        let left = fs::read_to_string(&path).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(written.is_err());
+        assert_eq!(left, fixed);
+    }
+
+    #[test]
     fn saving_one_setting_starts_a_file_that_is_not_there() {
         let dir = dir("fresh");
         let path = dir.join("settings.json");
@@ -539,7 +737,7 @@ mod tests {
         };
         this.write_over(&path, |saved| saved.version.clone_from(&this.version))
             .unwrap();
-        let read = Settings::read(&path).unwrap();
+        let read = Settings::read(&path).unwrap().unwrap();
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(read, this);
     }
@@ -584,7 +782,7 @@ mod tests {
         chosen_elsewhere.write(&path).unwrap();
         following.write_theme(&path).unwrap();
         assert_eq!(
-            Settings::read(&path).unwrap().theme,
+            Settings::read(&path).unwrap().unwrap().theme,
             Mode::Dark,
             "the other Arcwise chose Dark, which stops following Windows"
         );
@@ -594,7 +792,7 @@ mod tests {
             ..following.clone()
         };
         dark.write_theme(&path).unwrap();
-        let read = Settings::read(&path).unwrap();
+        let read = Settings::read(&path).unwrap().unwrap();
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(
             read.theme,
