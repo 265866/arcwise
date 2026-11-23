@@ -11,7 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(ui)* keep a settings file Arcwise couldn't read, and read one with a byte order mark ([#27](https://github.com/265866/arcwise/pull/27))
+- When Arcwise can't read its settings file, as after a mistaken hand edit, it no longer replaces
+  your settings with the defaults the next time it saves. It leaves the file for you to fix, and
+  the settings you change until Arcwise opens again aren't kept. A settings file saved by an
+  editor that adds a byte order mark at its start is no longer unreadable
+  ([#27](https://github.com/265866/arcwise/pull/27)).
 
 ## [0.11.1](https://github.com/265866/arcwise/compare/v0.11.0...v0.11.1) - 2026-11-23
 
