@@ -343,6 +343,24 @@ Write these like this rather than inventing a workaround:
 - **Pinning.** Pin a future with `std::pin::pin!`. `tokio::pin!` writes `allow(unused_mut)` over the
   caller's `let`.
 
+### Test-only code
+
+The checks read a `#[cfg(test)]` module, such as a screenshot capture or a test helper, like any
+other code: clippy and the custom lints run on every target. These catch test code first:
+
+- **Formatting.** Run `just fmt`, not `cargo fmt`, whose stable rustfmt skips the nightly options in
+  `rustfmt.toml`, so `just fmt-check` still fails.
+- **Spelling.** `just typos` reads test vectors too: the input of base64 `"Zm8="` is two letters
+  it takes for a misspelled "of". Pick vectors that are words, such as `b"Man"` for `"TWFu"`.
+- **clippy.** `-D warnings` holds here too. `write!` into a `String` returns `fmt::Result`: use
+  `writeln!(out, ..)?` in a helper that returns it, and unwrap once at the test, not
+  `let _ = write!(..)`.
+- **Comments.** `code_comment` reads test bodies: move the explanation into the item's `///` doc,
+  or the block into a documented helper.
+- **Tuples and loops.** `multi_field_tuple` turns `Vec<(u16, u16, Kind)>` into a `Vec` of a
+  named struct, and `iterator_chain_in_for` turns `for x in a.iter().flat_map(..)` into a named
+  `let` that collects the chain, then a loop over it.
+
 ## Where trellis goes further than the guide
 
 - **No code comments.** The guide allows `//` comments; trellis doesn't, except `// SAFETY:`. A
@@ -379,13 +397,17 @@ Write these like this rather than inventing a workaround:
 
 ## Documentation
 
-A trellis project's docs have one shape: a short README, an index in its Documentation section,
-and a page in `docs/` for each task a reader has.
+A trellis project's README is what a stranger reads first, so it opens, in this order, with what
+the project is, who it's for, how it differs and its limits; a list of what it does; one picture,
+or for a project without a UI a sample of its output or code; and a Quick start that ends in
+something working. Its Documentation section then indexes a page in `docs/` for each task a reader
+has, where the depth goes, and the License section closes it.
 
 ### Docs checked by `just policy`
 
-`trellis-policy`'s `docs_index` and `docs_layout` rules check these, with `docs_files` and
-`readme_sections` in `[workspace.metadata.policy]`. They read Markdown as GitHub renders it:
+`trellis-policy`'s `docs_index`, `docs_layout` and `readme` rules check these, with the settings
+in `[workspace.metadata.policy]`. The first two check the layout, with `docs_files` and
+`readme_sections`. They read Markdown as GitHub renders it:
 text in code, in HTML or in an HTML comment is neither a heading nor a link.
 
 - Every file `docs_files` lists exists: `README.md`, `AGENTS.md`, `CONTRIBUTING.md`,
@@ -400,21 +422,66 @@ text in code, in HTML or in an HTML comment is neither a heading nor a link.
 - The Documentation section is an index and nothing else. Each entry is a one-line list item: a
   link written exactly `[Title](path)` with a relative path, then `: ` and a description that
   has a letter and ends in `.`, such as `- [Title](path): what the reader does with it.` Every
-  page directly under `docs/` has an entry.
+  page directly under `docs/` has an entry, there or, for a page only contributors need, in a
+  `## Documentation` section of `CONTRIBUTING.md` written the same way.
 - A page in a subdirectory of `docs/` is linked from a page in the directory above it, with any
   link GitHub renders.
 - Every page, at any depth under `docs/`, starts with a `# Title` line, after any comments,
   then a blank line and a paragraph with a letter in it outside images. Pages use the `.md`
-  extension, and neither the README nor a page starts with a byte order mark.
-- No HTML in the README or a page leaves a comment, a tag or a quoted attribute value open, and
-  every HTML element opened in a section closes in the same section, so nothing that follows is
-  hidden or rendered inside it. Comments may come before the title and in the index.
+  extension, and neither the README, a page nor a `CONTRIBUTING.md` with a `## Documentation`
+  index starts with a byte order mark.
+- No HTML in the README, a page or a `CONTRIBUTING.md` with a `## Documentation` index leaves a
+  comment, a tag or a quoted attribute value open, and every HTML element opened in a section
+  closes in the same section, so nothing that follows is hidden or rendered inside it. Comments
+  may come before the title and in the index.
+- These checks read the `.md` pages under `docs/`, and fail a file there with another Markdown
+  extension, such as `.markdown`. They read no other file there. To `just rule-changes`, the pages
+  other than this one and the `.png`, `.svg`, `.jpg`, `.jpeg`, `.gif` and `.webp` images under
+  `docs/` are neither rule nor code, a `.rs` file other than a `build.rs` is code, and any other
+  file, such as `docs/schema.sql`, is a rule, as is an agent instruction file such as
+  `docs/AGENTS.md`.
+
+The `readme` rule checks what the README and the pages hold, with `interfaces`, `readme_sections`
+and the workspace's `license`. It checks that each part is there, never its wording or layout.
+These fail `just policy`:
+
+- `interfaces` is set, and `readme_sections` holds `Quick start`, `Documentation` and `License`,
+  in that order, with any other sections between them. A library without a license has no
+  `License`.
+- The `## License` section links each license file `license` names with a relative link:
+  `LICENSE`, or `LICENSE-MIT` and `LICENSE-APACHE`.
+- Every local image the README or a page shows exists, as a Markdown image or an HTML
+  `<img src>`, with its path relative to the file that shows it.
+- Every PNG under `docs/`, and every PNG the README or a page shows wherever it is, carries only
+  the chunks that draw the image, its colours and its animation, and nothing after its `IEND`
+  chunk, where a cropping tool can leave the uncropped image. Any other chunk, such as `tEXt`,
+  `eXIf`, `tIME`, `sPLT` or a private one, fails, and so does a file named `.png` that isn't a
+  PNG. `oxipng --strip safe <file>` strips them. A Git LFS pointer gets a notice instead, since
+  CI's checkout doesn't fetch Git LFS files.
+- Every image before the README's first `##` that links a page in `docs/` has alt text. A
+  decorative image may have `alt=""`, and so may a badge that links outside `docs/`.
+- Every gallery, a page titled `# Screenshots` or with a `## Screenshots` section, in any case and
+  after any emoji, is linked from the README's `## Documentation` section.
+
+These only print a notice in `just policy`, since a new project's README is an outline until
+someone writes it. `just policy-release`, which the release pull request and the release workflow
+run, fails on them:
+
+- No `**To write:**` prompt of the outline is left in the README or a page.
+- Before its first `##`, the README has an opening paragraph with words outside badges, images and
+  links.
+- When the first entry of `interfaces` is `web`, `desktop` or `terminal`, the README has a
+  picture before its first `##`: an image linked to a page in `docs/`, either to a heading it has,
+  such as `docs/usage.md#screenshots`, or without an anchor to a gallery. The check doesn't tell
+  a badge from a picture, so a badge linked there passes too; review judges the picture.
 
 ### Docs review checklist
 
 No check decides these, so review does.
 
-- **A short README.** Anything longer than a few commands moves to a page in `docs/`.
+- **The README's order.** The opening says who it's for, how it differs and its limits, before
+  the features, the picture or sample, and the Quick start. What a first run doesn't need, such as
+  every option or platform, goes on a page in `docs/`.
 - **One page per task.** Each page covers one task a reader has, such as installing, verifying a
   release or configuring, and its index entry says what the reader does with it.
 - **Page shape.** The paragraph after the title says who the page is for and what it gets them.

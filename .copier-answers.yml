@@ -1,5 +1,5 @@
 # Copier writes this file. `uvx copier update` reads it to update the project from trellis.
-_commit: v0.19.3
+_commit: v0.20.0
 _src_path: https://github.com/265866/trellis.git
 architectures:
 - x86_64
@@ -7,8 +7,10 @@ author: '265866'
 build: {}
 description: A desktop lineup browser for Valorant.
 github_owner: '265866'
+interface: desktop
 kind: binary
 license: MIT OR Apache-2.0
+other_interfaces: []
 platforms:
 - windows
 project_name: arcwise
