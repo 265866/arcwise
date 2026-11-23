@@ -6,7 +6,7 @@ browser for Valorant. Pick a map and an agent, see where each piece of utility l
 exactly where to stand, where to aim and how to throw. It is a separate window, not an overlay:
 keep it on a second monitor while you play.
 
-![Choosing a map](screenshots/choose-map.png)
+![Choose a map: a card for each map with lineups, with its picture and how many lineups it has. The maps are invented for the screenshots.](screenshots/choose-map.png)
 
 ## Install on Windows
 
@@ -40,7 +40,7 @@ The uninstaller asks whether to delete your settings too.
   frame rate even while another window has focus, at about an eighth of one CPU core (as
   measured for Arcwise 0.10.0, which decodes the same way).
 
-![Choosing an agent](screenshots/choose-agent.png)
+![Choose an agent: the agents grouped as duelists, initiators, controllers and sentinels, each with how many lineups it has on the map. The agents are invented for the screenshots.](screenshots/choose-agent.png)
 
 ## Keyboard
 
@@ -142,3 +142,31 @@ command line Arcwise can't read, such as an unknown flag or `--side up`, opens t
 error. `arcwise --version` prints the
 version and exits; from a console, pipe or redirect it, such as `arcwise --version | more`, since
 Arcwise is a windowed program and has no console of its own.
+
+## Screenshots
+
+The screenshots show Arcwise 0.11.1 in its dark theme, with background blur off, on a library made
+up for them. Its maps, agents, abilities, callouts, pictures and clips are invented and drawn, and
+none of them comes from the game or from library.arcwise.lol. Select an image to see it at full
+size.
+
+| Screen | Screenshot |
+| --- | --- |
+| **Choose a map:** the first run, before a map is picked | [<img src="screenshots/choose-map.png" width="480" alt="Choose a map: four invented maps, each with its picture and how many lineups it has">](screenshots/choose-map.png) |
+| **Choose an agent:** each agent by role, with how many lineups it has on the map | [<img src="screenshots/choose-agent.png" width="480" alt="Choose an agent: one invented agent in each of the four roles, each with how many lineups it has on Saltmarsh">](screenshots/choose-agent.png) |
+| **The map:** a marker for every landing, and a filter for each ability | [<img src="screenshots/map.png" width="480" alt="The map Saltmarsh with ten landing markers, two of them with a count, under buttons for All and each of three abilities">](screenshots/map.png) |
+| **A landing:** pointing at a marker says what lands there and where it is thrown from | [<img src="screenshots/landing.png" width="480" alt="A tooltip over a marker: Tracer Dart lands at A Default, from A Lobby, A Main and A Link">](screenshots/landing.png) |
+| **The map picker:** the header's map and agent open as dropdowns after the first run | [<img src="screenshots/map-picker.png" width="480" alt="The map dropdown open under the header, with the four maps and Saltmarsh selected">](screenshots/map-picker.png) |
+| **A lineup:** the clip, the stand spots for the landing, the bow's charge and the steps | [<img src="screenshots/lineup.png" width="480" alt="A lineup open: the map with the throw drawn from stand spot 1, and the panel with the clip of the dart in flight, the four view tiles, the bow's charge bar and the steps">](screenshots/lineup.png) |
+| **Stand:** the map around the stand spot, with the throw's direction | [<img src="screenshots/stand.png" width="480" alt="The stand view: the map zoomed in on stand spot 1, with a dashed line for the throw">](screenshots/stand.png) |
+| **Aim:** the crosshair at the moment of the throw | [<img src="screenshots/aim.png" width="480" alt="The aim view: a drawn scene from the stand spot with the crosshair where to aim">](screenshots/aim.png) |
+| **Lands:** where the throw lands | [<img src="screenshots/lands.png" width="480" alt="The lands view: the same drawn scene with the landing glowing on the ground">](screenshots/lands.png) |
+| **Settings, General:** the libraries shown, and whether Arcwise opens where you left off | [<img src="screenshots/settings-general.png" width="480" alt="The General tab: the demo library folder with 40 lineups on 4 maps, the buttons to add a folder or a web address, and Open where I left off">](screenshots/settings-general.png) |
+| **Settings, Appearance:** the theme, the title bar and background blur. Reset shows because blur is off here, which isn't the default. | [<img src="screenshots/settings-appearance.png" width="480" alt="The Appearance tab: Dark, Light and System themes, Custom title bar on, and Background blur off with Reset beside it">](screenshots/settings-appearance.png) |
+| **Settings, Keyboard:** every shortcut, and the ones that can't change | [<img src="screenshots/settings-keyboard.png" width="480" alt="The Keyboard tab: the shortcuts for browsing, the views, the clip and the window, with Esc and the number keys marked fixed">](screenshots/settings-keyboard.png) |
+| **Settings, Updates:** as a copy run from the zip or built from source shows it | [<img src="screenshots/settings-updates.png" width="480" alt="The Updates tab: Automatic updates on, Arcwise 0.11.1 not run from where it was installed so it does not update itself, and What's new">](screenshots/settings-updates.png) |
+| **Windows' title bar:** with **Custom title bar** off | [<img src="screenshots/windows-title-bar.png" width="480" alt="Arcwise under Windows' own dark title bar, with the header below it">](screenshots/windows-title-bar.png) |
+
+An installed Arcwise's **Updates** tab says when it last checked and, when there is one, offers the
+newer version. That needs a real check with GitHub, so it has no screenshot, and neither does
+**Offline…**, which only a library on the web has.
